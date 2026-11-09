@@ -1,0 +1,11 @@
+{
+  "name": "fason-hisob",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Kiyim ishlab chiqarish uchun fason, material, sex, sotuv va foyda hisobi (PWA)",
+  "scripts": {
+    "start": "npx --yes serve -l 8080 .",
+    "test": "node --test tests/*.test.js"
+  }
+}
