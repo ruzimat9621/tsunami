@@ -13,60 +13,79 @@ export function sum(arr, f) {
 export const receivedQty = (m) => sum(m.receipts, (r) => num(r.qty));
 export const soldQty = (m) => sum(m.sales, (s) => num(s.qty));
 
-// Hisob uchun asosiy son: sexdan olingan bo'lsa — haqiqiy son, aks holda reja.
-export function baseQty(m) {
-  const r = receivedQty(m);
-  return r > 0 ? r : num(m.plannedQty);
+// 1 ta kiyimga sarf = barcha qismlar yig'indisi (tepa 1,7 + ishton 1 = 2,7)
+export const perItem = (mat) => sum(mat.parts, (p) => num(p.per));
+
+// Sarf qaysi birlikda o'lchanadi: kg bo'lib, "1 kg = necha metr" kiritilgan bo'lsa — metrda
+export function consumptionUnit(mat) {
+  if (mat.unit === 'kg') return num(mat.metersPerKg) > 0 ? 'm' : 'kg';
+  return mat.unit || 'm';
 }
 
-// Sexning 1 dona uchun narxi
-export function workshopPerItem(m) {
-  if (m.wsMode === 'total') return num(m.servicePerItem);
-  return num(m.cutPerItem) + num(m.sewPerItem);
-}
-
-// Bitta material qatori: jami narx, nechta chiqadi, qancha ishlatildi, qancha qoldi
+// Bitta material/aksessuar: jami narx, mavjud miqdor, nechta chiqadi, qancha ishlatildi, qancha qoldi
 export function materialRow(mat, qty) {
   const amount = num(mat.qty);
   const price = num(mat.price);
-  const per = num(mat.perItem);
   const total = amount * price;
-  const possible = per > 0 ? Math.floor(amount / per + 1e-9) : null;
+  const conv = mat.unit === 'kg' && num(mat.metersPerKg) > 0;
+  const available = conv ? amount * num(mat.metersPerKg) : amount;
+  const per = perItem(mat);
+  const unitPrice = available > 0 ? total / available : 0; // sarf birligi narxi
+  const perCost = per * unitPrice; // 1 ta kiyimga shu materialdan ketadigan pul
+  const possible = per > 0 ? Math.floor(available / per + 1e-9) : null;
   const used = per > 0 && qty > 0 ? qty * per : null;
-  const left = used !== null ? amount - used : null;
-  const leftValue = left !== null && left > 0 ? left * price : 0;
-  return { amount, price, per, total, possible, used, left, leftValue };
+  const left = used !== null ? available - used : null;
+  const leftValue = left !== null && left > 0 ? left * unitPrice : 0;
+  return { amount, price, total, available, unit: consumptionUnit(mat), per, perCost, possible, used, left, leftValue };
 }
 
+// Sotuv narxi: foiz, tannarx ustiga summa yoki to'g'ridan-to'g'ri narx
 export function salePrice(unitCost, markupType, markupValue) {
   const v = num(markupValue);
+  if (markupType === 'price') return v;
   if (markupType === 'sum') return unitCost + v;
   return unitCost * (1 + v / 100);
+}
+
+export function serviceTotal(s, qty) {
+  return s.mode === 'jami' ? num(s.price) : num(s.price) * qty;
 }
 
 export function modelSummary(m) {
   const received = receivedQty(m);
   const planned = num(m.plannedQty);
-  const qty = received > 0 ? received : planned;
-  const isActual = received > 0;
 
-  const rows = (m.materials || []).map((x) => ({ ...x, calc: materialRow(x, qty) }));
-  const materialsTotal = sum(rows, (r) => r.calc.total);
+  const all = m.materials || [];
+  const preRows = all.map((x) => ({ ...x, calc: materialRow(x, 0) }));
+  const limits = preRows.filter((r) => r.calc.possible !== null);
+  const possibleOutput = limits.length ? Math.min(...limits.map((r) => r.calc.possible)) : null;
+  const limiting = limits.length ? limits.reduce((a, b) => (b.calc.possible < a.calc.possible ? b : a)) : null;
+
+  // Hisob uchun son: sexdan olingan → reja → materialdan avtomatik chiqadigan
+  let qty = 0, basis = 'none';
+  if (received > 0) { qty = received; basis = 'received'; }
+  else if (planned > 0) { qty = planned; basis = 'planned'; }
+  else if (possibleOutput) { qty = possibleOutput; basis = 'auto'; }
+
+  const rows = all.map((x) => ({ ...x, calc: materialRow(x, qty) }));
+  const fabrics = rows.filter((r) => r.kind !== 'aks');
+  const accessories = rows.filter((r) => r.kind === 'aks');
+  const fabricTotal = sum(fabrics, (r) => r.calc.total);
+  const accTotal = sum(accessories, (r) => r.calc.total);
+  const materialsTotal = fabricTotal + accTotal;
   const leftValue = sum(rows, (r) => r.calc.leftValue);
-  const possibles = rows.filter((r) => r.calc.possible !== null).map((r) => r.calc.possible);
-  const possibleOutput = possibles.length ? Math.min(...possibles) : null;
 
-  const wsItem = workshopPerItem(m);
-  const cutTotal = m.wsMode === 'total' ? 0 : qty * num(m.cutPerItem);
-  const sewTotal = m.wsMode === 'total' ? 0 : qty * num(m.sewPerItem);
-  const workshopTotal = qty * wsItem;
-  const otherTotal = sum(m.expenses, (e) => num(e.amount));
-  const totalCost = materialsTotal + workshopTotal + otherTotal;
+  const wsLines = (m.wsLines || []).map((l) => ({ ...l, total: num(l.price) * qty }));
+  const wsItem = sum(wsLines, (l) => num(l.price));
+  const workshopTotal = wsItem * qty;
 
-  const unitCost = qty > 0 ? totalCost / qty : 0;
-  const unitCostNet = qty > 0 ? (totalCost - leftValue) / qty : 0;
-  const unitMaterial = qty > 0 ? materialsTotal / qty : 0;
-  const unitOther = qty > 0 ? otherTotal / qty : 0;
+  const services = (m.services || []).map((s) => ({ ...s, total: serviceTotal(s, qty) }));
+  const servicesTotal = sum(services, (s) => s.total);
+
+  const totalCost = materialsTotal + workshopTotal + servicesTotal;
+  const per = (v) => (qty > 0 ? v / qty : 0);
+  const unitCost = per(totalCost);
+  const unitCostNet = per(totalCost - leftValue);
 
   const price = salePrice(unitCost, m.markupType, m.markupValue);
   const unitProfit = price - unitCost;
@@ -80,10 +99,12 @@ export function modelSummary(m) {
   const wsDebt = workshopTotal - wsPaid;
 
   return {
-    received, planned, qty, isActual, rows,
-    materialsTotal, leftValue, possibleOutput,
-    wsItem, cutTotal, sewTotal, workshopTotal, otherTotal, totalCost,
-    unitCost, unitCostNet, unitMaterial, unitOther,
+    received, planned, qty, basis, isActual: basis === 'received',
+    rows, fabrics, accessories, fabricTotal, accTotal, materialsTotal, leftValue,
+    possibleOutput, limiting,
+    wsLines, wsItem, workshopTotal, services, servicesTotal, totalCost,
+    unitCost, unitCostNet,
+    unitFabric: per(fabricTotal), unitAcc: per(accTotal), unitServices: per(servicesTotal),
     price, unitProfit, sold, revenue, stock, profitSold, expectedProfit,
     wsPaid, wsDebt,
   };
@@ -93,7 +114,7 @@ const inMonth = (date, ym) => typeof date === 'string' && date.startsWith(ym);
 
 // Oylik hisobot: shu oydagi sotuvlar, sotilgan tovar tannarxi, oylik rasxodlar, toza foyda
 export function monthReport(state, ym) {
-  let revenue = 0, cogs = 0, soldCount = 0, purchases = 0, otherSpent = 0;
+  let revenue = 0, cogs = 0, soldCount = 0, purchases = 0;
   for (const m of state.models || []) {
     const s = modelSummary(m);
     for (const sale of m.sales || []) {
@@ -106,13 +127,10 @@ export function monthReport(state, ym) {
     for (const mat of m.materials || []) {
       if (inMonth(mat.date, ym)) purchases += num(mat.qty) * num(mat.price);
     }
-    for (const e of m.expenses || []) {
-      if (inMonth(e.date, ym)) otherSpent += num(e.amount);
-    }
   }
   const overheadItems = (state.overhead || []).filter((o) => o.month === ym);
   const overhead = sum(overheadItems, (o) => num(o.amount));
   const grossProfit = revenue - cogs;
   const netProfit = grossProfit - overhead;
-  return { revenue, cogs, soldCount, grossProfit, overhead, overheadItems, netProfit, purchases, otherSpent };
+  return { revenue, cogs, soldCount, grossProfit, overhead, overheadItems, netProfit, purchases };
 }

@@ -1,5 +1,5 @@
 import { loadState, saveState, uid, normalize } from './store.js';
-import { num, sum, modelSummary, monthReport, materialRow, receivedQty, soldQty } from './calc.js';
+import { num, sum, modelSummary, monthReport, materialRow, receivedQty, soldQty, salePrice } from './calc.js';
 
 // ---------- Yordamchilar ----------
 const $ = (sel) => document.querySelector(sel);
@@ -7,12 +7,12 @@ const h = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<'
 
 const money = (v) => {
   const n = Math.round(num(v));
-  return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + " so'm";
+  return (n < 0 ? '-' : '') + Math.abs(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + " so'm";
 };
 const fmt = (v, d = 2) => {
   const n = Math.round(num(v) * 10 ** d) / 10 ** d;
-  const [i, f] = n.toString().split('.');
-  return i.replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + (f ? ',' + f : '');
+  const [i, f] = Math.abs(n).toString().split('.');
+  return (n < 0 ? '-' : '') + i.replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + (f ? ',' + f : '');
 };
 const today = () => {
   const d = new Date();
@@ -23,9 +23,14 @@ const MONTHS = ['Yanvar', 'Fevral', 'Mart', 'Aprel', 'May', 'Iyun', 'Iyul', 'Avg
 const monthName = (ym) => { const [y, m] = ym.split('-'); return `${MONTHS[+m - 1]} ${y}`; };
 const shiftMonth = (ym, d) => { const [y, m] = ym.split('-').map(Number); const t = new Date(y, m - 1 + d, 1); return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}`; };
 const dateUz = (d) => (d ? d.split('-').reverse().join('.') : '');
-const UNITS = { m: 'metr', dona: 'dona', kg: 'kg', pachka: 'pachka' };
-const unitShort = (u) => ({ m: 'm', dona: 'dona', kg: 'kg', pachka: 'pachka' }[u] || 'm');
+const FABRIC_UNITS = { m: 'metr', kg: 'kg' };
+const ACC_UNITS = { dona: 'dona', m: 'metr', pachka: 'pachka', kg: 'kg' };
+const unitShort = (u) => ({ m: 'm', dona: 'dona', kg: 'kg', pachka: 'pachka' }[u] || u || '');
 const STATUSES = { jarayonda: 'Jarayonda', sexda: 'Sexda tikilmoqda', sotuvda: 'Sotuvda', yopilgan: 'Yopilgan' };
+const PARTS = ["To'liq", 'Tepa', 'Ishton', 'Yubka', 'Yeng', 'Yoqa', 'Astar', 'Kapyushon', "Cho'ntak", 'Manjet', 'Bel'];
+const WS_TYPES = ["Usluga (to'liq)", 'Bichuv', 'Tikuv', 'Overlok', 'Raskroy', 'Boshqa'];
+const SERVICES = ['Dazmol', 'Upakovka', 'Dostavka', 'Print', 'Vishivka', 'Petlya', 'Tugma qadash', 'Etiketka / birka', 'OTK (tekshiruv)', 'Taksi / transport'];
+const ACCESSORIES = ['Tugma', 'Zamok', 'Rezinka', 'Lenta', 'Kant', 'Etiketka', 'Ip', 'Knopka', 'Lyuversa', 'Shnur'];
 const telLink = (p) => (p ? `<a class="tel" href="tel:${h(String(p).replace(/[^\d+]/g, ''))}">📞 ${h(p)}</a>` : '');
 
 let state = null;
@@ -38,6 +43,7 @@ async function commit() {
 
 const byId = (list, id) => state[list].find((x) => x.id === id);
 const model = (id) => byId('models', id);
+const cover = (m) => m.colorways?.[0]?.photo || '';
 
 function toast(msg) {
   const t = $('#toast');
@@ -50,42 +56,52 @@ function toast(msg) {
 // ---------- Forma (pastdan chiquvchi oyna) ----------
 let currentForm = null;
 
+const partRow = (p = {}) => `<div class="part-row">
+  <input name="part_name" list="parts_list" value="${h(p.name ?? '')}" placeholder="Qism: tepa, ishton...">
+  <input name="part_per" type="text" inputmode="decimal" autocomplete="off" value="${h(p.per ?? '')}" placeholder="0">
+  <button type="button" class="icon-btn" data-act="del-part" aria-label="O'chirish">✕</button></div>`;
+
+function fieldHtml(f, v) {
+  if (f.type === 'hidden') return '';
+  const val = v[f.name] ?? f.default ?? '';
+  const req = f.required ? 'required' : '';
+  const id = 'f_' + f.name;
+  let input;
+  if (f.type === 'select') {
+    input = `<select id="${id}" name="${f.name}" ${req}>${f.options.map((o) =>
+      `<option value="${h(o.value)}" ${String(o.value) === String(val) ? 'selected' : ''}>${h(o.label)}</option>`).join('')}</select>`;
+  } else if (f.type === 'textarea') {
+    input = `<textarea id="${id}" name="${f.name}" rows="2" placeholder="${h(f.placeholder || '')}">${h(val)}</textarea>`;
+  } else if (f.type === 'photo') {
+    input = `<div class="photo-input ${f.big ? 'big' : ''}">
+      <img id="${id}_prev" src="${h(val)}" ${val ? '' : 'hidden'} alt="">
+      <input type="hidden" name="${f.name}" id="${id}" value="${h(val)}">
+      <label class="btn ghost">📷 ${val ? 'Rasmni almashtirish' : 'Rasm tanlash'}<input type="file" accept="image/*" data-photo="${id}" hidden></label>
+    </div>`;
+  } else if (f.type === 'parts') {
+    const rows = Array.isArray(val) && val.length ? val : [{ name: "To'liq", per: '' }];
+    input = `<div class="parts" id="${id}">${rows.map(partRow).join('')}</div>
+      <datalist id="parts_list">${PARTS.map((o) => `<option value="${h(o)}">`).join('')}</datalist>
+      <button type="button" class="btn ghost sm" data-act="add-part">+ Qism qo'shish</button>`;
+  } else if (f.type === 'number') {
+    input = `<input id="${id}" name="${f.name}" type="text" inputmode="decimal" autocomplete="off" value="${h(val)}" placeholder="${h(f.placeholder || '0')}" ${req}>`;
+  } else {
+    const list = f.list ? `list="${id}_list"` : '';
+    const dl = f.list ? `<datalist id="${id}_list">${f.list.map((o) => `<option value="${h(o)}">`).join('')}</datalist>` : '';
+    input = `<input id="${id}" name="${f.name}" type="${f.type || 'text'}" ${f.type === 'tel' ? 'inputmode="tel"' : ''} value="${h(val)}" placeholder="${h(f.placeholder || '')}" ${list} ${req}>${dl}`;
+  }
+  const label = typeof f.label === 'function' ? f.label(v) : f.label;
+  return `<div class="field ${f.half ? 'half' : ''}" data-field="${f.name}"><label for="${id}" data-label="${f.name}">${h(label)}${f.suffix ? ` <small>(${h(f.suffix)})</small>` : ''}</label>${input}${f.hint ? `<small class="hint">${h(f.hint)}</small>` : ''}</div>`;
+}
+
 function openForm(cfg) {
   currentForm = cfg;
   const v = cfg.values || {};
-  const fields = cfg.fields.map((f) => {
-    if (f.type === 'hidden') return '';
-    const val = v[f.name] ?? f.default ?? '';
-    const req = f.required ? 'required' : '';
-    const id = 'f_' + f.name;
-    let input;
-    if (f.type === 'select') {
-      input = `<select id="${id}" name="${f.name}" ${req}>${f.options.map((o) =>
-        `<option value="${h(o.value)}" ${String(o.value) === String(val) ? 'selected' : ''}>${h(o.label)}</option>`).join('')}</select>`;
-    } else if (f.type === 'textarea') {
-      input = `<textarea id="${id}" name="${f.name}" rows="2" placeholder="${h(f.placeholder || '')}">${h(val)}</textarea>`;
-    } else if (f.type === 'photo') {
-      input = `<div class="photo-input">
-        <img id="${id}_prev" src="${h(val)}" ${val ? '' : 'hidden'} alt="">
-        <input type="hidden" name="${f.name}" id="${id}" value="${h(val)}">
-        <label class="btn ghost">📷 Rasm tanlash<input type="file" accept="image/*" data-photo="${id}" hidden></label>
-        ${val ? `<button type="button" class="btn ghost" data-act="clear-photo" data-id="${id}">O'chirish</button>` : ''}
-      </div>`;
-    } else if (f.type === 'number') {
-      input = `<input id="${id}" name="${f.name}" type="text" inputmode="decimal" autocomplete="off" value="${h(val)}" placeholder="${h(f.placeholder || '0')}" ${req}>`;
-    } else {
-      const list = f.list ? `list="${id}_list"` : '';
-      const dl = f.list ? `<datalist id="${id}_list">${f.list.map((o) => `<option value="${h(o)}">`).join('')}</datalist>` : '';
-      input = `<input id="${id}" name="${f.name}" type="${f.type || 'text'}" ${f.type === 'tel' ? 'inputmode="tel"' : ''} value="${h(val)}" placeholder="${h(f.placeholder || '')}" ${list} ${req}>${dl}`;
-    }
-    return `<div class="field ${f.half ? 'half' : ''}"><label for="${id}">${h(f.label)}${f.suffix ? ` <small>(${h(f.suffix)})</small>` : ''}</label>${input}${f.hint ? `<small class="hint">${h(f.hint)}</small>` : ''}</div>`;
-  }).join('');
-
   $('#sheet').innerHTML = `
     <div class="sheet-backdrop" data-act="close-form"></div>
     <form class="sheet-panel" id="sheet-form" novalidate>
       <div class="sheet-head"><h3>${h(cfg.title)}</h3><button type="button" class="icon-btn" data-act="close-form" aria-label="Yopish">✕</button></div>
-      <div class="sheet-body"><div class="fields">${fields}</div><div id="form-live" class="form-live"></div></div>
+      <div class="sheet-body"><div class="fields">${cfg.fields.map((f) => fieldHtml(f, v)).join('')}</div><div id="form-live" class="form-live"></div></div>
       <div class="sheet-foot">
         ${cfg.onDelete ? `<button type="button" class="btn danger" data-act="form-delete">O'chirish</button>` : ''}
         <button type="submit" class="btn primary">${h(cfg.submitText || 'Saqlash')}</button>
@@ -94,8 +110,6 @@ function openForm(cfg) {
   $('#sheet').classList.add('open');
   document.body.classList.add('noscroll');
   updateLive();
-  const first = $('#sheet-form input:not([type=hidden]), #sheet-form select');
-  if (first && !('ontouchstart' in window)) first.focus();
 }
 
 function closeForm() {
@@ -109,6 +123,13 @@ function readForm() {
   const fd = new FormData($('#sheet-form'));
   const out = {};
   for (const f of currentForm.fields) {
+    if (f.type === 'parts') {
+      const names = fd.getAll('part_name');
+      const pers = fd.getAll('part_per');
+      out[f.name] = names.map((n, i) => ({ name: String(n).trim(), per: pers[i] === '' ? '' : num(pers[i]) }))
+        .filter((p) => p.name || num(p.per) > 0);
+      continue;
+    }
     const raw = fd.get(f.name);
     out[f.name] = f.type === 'number' ? (raw === '' || raw === null ? '' : num(raw)) : (raw ?? '').toString().trim();
   }
@@ -116,8 +137,16 @@ function readForm() {
 }
 
 function updateLive() {
-  if (!currentForm?.live) return;
-  $('#form-live').innerHTML = currentForm.live(readForm()) || '';
+  if (!currentForm) return;
+  const v = readForm();
+  for (const f of currentForm.fields) {
+    if (f.showIf) document.querySelector(`[data-field="${f.name}"]`).hidden = !f.showIf(v);
+    if (typeof f.label === 'function') {
+      const el = document.querySelector(`[data-label="${f.name}"]`);
+      if (el) el.innerHTML = h(f.label(v)) + (f.suffix ? ` <small>(${h(f.suffix)})</small>` : '');
+    }
+  }
+  if (currentForm.live) $('#form-live').innerHTML = currentForm.live(v) || '';
 }
 
 document.addEventListener('submit', async (e) => {
@@ -125,8 +154,9 @@ document.addEventListener('submit', async (e) => {
   e.preventDefault();
   const vals = readForm();
   for (const f of currentForm.fields) {
-    if (f.required && (vals[f.name] === '' || vals[f.name] === null)) {
-      toast(`"${f.label}" ni to'ldiring`);
+    const hidden = f.showIf && !f.showIf(vals);
+    if (f.required && !hidden && (vals[f.name] === '' || vals[f.name] === null)) {
+      toast(`"${typeof f.label === 'function' ? f.label(vals) : f.label}" ni to'ldiring`);
       $('#f_' + f.name)?.focus();
       return;
     }
@@ -146,10 +176,20 @@ document.addEventListener('input', (e) => {
 document.addEventListener('change', async (e) => {
   const inp = e.target;
   if (inp.dataset.photo && inp.files?.[0]) {
-    const data = await resizeImage(inp.files[0], 700);
+    const data = await resizeImage(inp.files[0], 900);
     $('#' + inp.dataset.photo).value = data;
     const prev = $('#' + inp.dataset.photo + '_prev');
     prev.src = data; prev.hidden = false;
+  }
+  if (inp.dataset.colorways && inp.files?.length) {
+    const m = model(inp.dataset.colorways);
+    const files = [...inp.files];
+    toast(`${files.length} ta rasm yuklanmoqda…`);
+    for (const f of files) {
+      try { m.colorways.push({ id: uid(), photo: await resizeImage(f, 900), color: '' }); } catch { /* rasm o'qilmadi */ }
+    }
+    await commit();
+    toast(`${files.length} ta rasvetka qo'shildi. Rangini yozish uchun rasmni bosing.`);
   }
   if (inp.id === 'import-file' && inp.files?.[0]) importBackup(inp.files[0]);
   if (inp.closest('#sheet-form')) updateLive();
@@ -164,7 +204,7 @@ function resizeImage(file, max) {
       c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
       c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
       URL.revokeObjectURL(img.src);
-      resolve(c.toDataURL('image/jpeg', 0.72));
+      resolve(c.toDataURL('image/jpeg', 0.75));
     };
     img.onerror = reject;
     img.src = URL.createObjectURL(file);
@@ -173,9 +213,10 @@ function resizeImage(file, max) {
 
 // ---------- Formalar ----------
 const shopOptions = () => [{ value: '', label: '— Do\'kon tanlang —' }, ...state.shops.map((s) => ({ value: s.id, label: s.name + (s.market ? ` (${s.market})` : '') })), { value: '__new', label: '+ Yangi do\'kon qo\'shish' }];
-const wsOptions = () => [{ value: '', label: '— Sex tanlang —' }, ...state.workshops.map((s) => ({ value: s.id, label: s.name })), { value: '__new', label: '+ Yangi sex qo\'shish' }];
-const knownMaterials = () => [...new Set(state.models.flatMap((m) => m.materials.map((x) => x.name)).filter(Boolean))];
-const knownColors = () => [...new Set(state.models.flatMap((m) => m.materials.map((x) => x.color)).filter(Boolean))];
+const wsOptions = () => [{ value: '', label: '— Sex tanlang —' }, ...state.workshops.map((s) => ({ value: s.id, label: s.name + (s.owner ? ` — ${s.owner}` : '') })), { value: '__new', label: '+ Yangi sex qo\'shish' }];
+const allMaterials = () => state.models.flatMap((m) => m.materials);
+const knownNames = (kind) => [...new Set(allMaterials().filter((x) => (x.kind === 'aks') === (kind === 'aks')).map((x) => x.name).filter(Boolean))];
+const knownColors = () => [...new Set([...allMaterials().map((x) => x.color), ...state.models.flatMap((m) => m.colorways.map((c) => c.color))].filter(Boolean))];
 
 function shopForm(shop, after) {
   openForm({
@@ -206,11 +247,11 @@ function workshopForm(ws, after) {
     title: ws ? 'Sexni tahrirlash' : 'Yangi sex',
     values: ws,
     fields: [
-      { name: 'name', label: 'Sex nomi', required: true, placeholder: 'Masalan: Dilnoza sex' },
-      { name: 'owner', label: "Mas'ul shaxs", placeholder: 'Ismi' },
+      { name: 'name', label: 'Sex nomi', required: true, placeholder: 'Masalan: Chilonzor sex' },
+      { name: 'owner', label: 'Tikuvchi / mas\'ul ismi', placeholder: 'Ismi' },
       { name: 'address', label: 'Manzil', placeholder: 'Shahar, mahalla, ko\'cha, uy' },
       { name: 'phone', label: 'Telefon', type: 'tel', placeholder: '+998 ...' },
-      { name: 'phone2', label: "Qo'shimcha telefon (bichuvchi/tikuvchi)", type: 'tel' },
+      { name: 'phone2', label: "Qo'shimcha telefon (bichuvchi va h.k.)", type: 'tel' },
       { name: 'note', label: 'Izoh', type: 'textarea' },
     ],
     onSubmit: (v) => {
@@ -230,19 +271,18 @@ function modelForm(m) {
     title: m ? 'Fasonni tahrirlash' : 'Yangi fason',
     values: m || { status: 'jarayonda', date: today() },
     fields: [
-      { name: 'photo', label: 'Rasm', type: 'photo' },
-      { name: 'name', label: 'Fason nomi', required: true, placeholder: "Masalan: Ayollar ko'ylagi #12" },
+      { name: 'name', label: 'Fason nomi', required: true, placeholder: "Masalan: Ayollar kostyumi #12" },
       { name: 'code', label: 'Artikul / kod', half: true },
       { name: 'sizes', label: "O'lchamlar", half: true, placeholder: '42-50' },
       { name: 'date', label: 'Boshlangan sana', type: 'date', half: true },
       { name: 'status', label: 'Holati', type: 'select', half: true, options: Object.entries(STATUSES).map(([value, label]) => ({ value, label })) },
-      { name: 'plannedQty', label: 'Reja: nechta tikiladi', type: 'number', suffix: 'dona', hint: "Sexdan tovar olinmaguncha hisob shu son bo'yicha taxminiy qilinadi" },
+      { name: 'plannedQty', label: 'Reja: nechta tikiladi (ixtiyoriy)', type: 'number', suffix: 'dona', hint: "Bo'sh qoldirsangiz — materialdan nechta chiqishi avtomatik olinadi" },
       { name: 'note', label: 'Izoh', type: 'textarea' },
     ],
     onSubmit: (v) => {
       if (m) Object.assign(m, v);
       else {
-        const nm = { id: uid(), materials: [], expenses: [], receipts: [], sales: [], wsMode: 'split', markupType: '%', markupValue: 30, ...v };
+        const nm = { id: uid(), colorways: [], materials: [], wsLines: [], services: [], receipts: [], sales: [], markupType: '%', markupValue: 30, ...v };
         state.models.unshift(nm);
         location.hash = '#/model/' + nm.id;
       }
@@ -255,93 +295,123 @@ function modelForm(m) {
   });
 }
 
-function materialForm(m, mat) {
-  const s = modelSummary(m);
+function colorwayForm(m, cw) {
+  const idx = m.colorways.indexOf(cw);
   openForm({
-    title: mat ? 'Materialni tahrirlash' : 'Material qo\'shish (bozordan)',
-    values: mat || { unit: 'm', date: today() },
+    title: `Rasvetka ${idx + 1} / ${m.colorways.length}`,
+    values: cw,
     fields: [
+      { name: 'photo', label: 'Rasm', type: 'photo', big: true },
+      { name: 'color', label: 'Rangi / nomi', list: knownColors(), placeholder: 'Masalan: Qora, Bej, Olivka' },
+      { name: 'note', label: 'Izoh', type: 'textarea' },
+    ],
+    onSubmit: (v) => Object.assign(cw, v),
+    onDelete: () => { if (!confirm("Bu rasvetkani o'chirasizmi?")) return false; m.colorways = m.colorways.filter((x) => x !== cw); },
+  });
+}
+
+function materialForm(m, mat, kind = mat?.kind || 'mato') {
+  const isAcc = kind === 'aks';
+  const s = modelSummary(m);
+  const unitOf = (v) => (v.unit === 'kg' ? (num(v.metersPerKg) > 0 ? 'm' : 'kg') : unitShort(v.unit));
+  openForm({
+    title: (mat ? 'Tahrirlash: ' : "Qo'shish: ") + (isAcc ? 'aksessuar / detal' : 'mato'),
+    values: mat || { unit: isAcc ? 'dona' : 'm', date: today(), parts: [{ name: "To'liq", per: '' }] },
+    fields: [
+      { name: 'name', label: isAcc ? 'Aksessuar nomi' : 'Mato nomi', required: true, list: isAcc ? [...new Set([...ACCESSORIES, ...knownNames('aks')])] : knownNames('mato'), placeholder: isAcc ? 'Tugma, zamok, rezinka...' : 'Shtapel, krep, futer...' },
+      { name: 'color', label: 'Rangi', half: true, list: knownColors(), placeholder: 'Qora, oq...' },
+      { name: 'unit', label: "Narxi nimaga", type: 'select', half: true, options: Object.entries(isAcc ? ACC_UNITS : FABRIC_UNITS).map(([value, label]) => ({ value, label: label + 'ga' })) },
       { name: 'shopId', label: "Qaysi do'kondan", type: 'select', options: shopOptions() },
-      { name: 'name', label: 'Material nomi', required: true, list: knownMaterials(), placeholder: 'Masalan: Shtapel, Krep, Tugma' },
-      { name: 'color', label: 'Rangi', half: true, list: knownColors(), placeholder: "Qora, oq..." },
-      { name: 'unit', label: "O'lchov", type: 'select', half: true, options: Object.entries(UNITS).map(([value, label]) => ({ value, label })) },
-      { name: 'qty', label: 'Olingan miqdor (metraj)', type: 'number', required: true, half: true },
-      { name: 'price', label: '1 birlik narxi', type: 'number', required: true, half: true, suffix: "so'm" },
-      { name: 'perItem', label: '1 ta kiyimga sarfi', type: 'number', hint: "Bichuvchi/sexdan so'rab kiriting. Masalan 1,8 (metr)" },
+      { name: 'qty', label: (v) => `Olingan miqdor (${unitShort(v.unit)})`, type: 'number', required: true, half: true },
+      { name: 'price', label: (v) => `1 ${unitShort(v.unit)} narxi`, type: 'number', required: true, half: true, suffix: "so'm" },
+      { name: 'metersPerKg', label: '1 kg dan necha metr chiqadi', type: 'number', showIf: (v) => v.unit === 'kg', hint: "Ixtiyoriy. Kiritsangiz, sarfni metrda yozasiz (masalan 1 kg ≈ 3,2 m). Kiritmasangiz — sarf kg da." },
+      { name: 'parts', label: (v) => `1 ta kiyimga sarfi (${unitOf(v)}) — qaysi qismga`, type: 'parts', hint: isAcc ? 'Masalan: Tepa — 6 (tugma), Ishton — 1 (zamok)' : "Masalan: Tepa — 1,7, Ishton — 1. Yoki To'liq — 2,7" },
       { name: 'date', label: 'Sana', type: 'date' },
       { name: 'note', label: 'Izoh', type: 'textarea', placeholder: 'Eni, sifati, partiya...' },
     ],
     live: (v) => {
-      const r = materialRow(v, s.qty);
-      const u = unitShort(v.unit);
-      let html = `<div class="live-row"><span>Jami narx</span><b>${money(r.total)}</b></div>`;
-      if (r.possible !== null) html += `<div class="live-row"><span>Shu materialdan chiqadi</span><b>${fmt(r.possible, 0)} dona</b></div>`;
-      if (r.used !== null) {
-        html += `<div class="live-row"><span>${s.isActual ? 'Ishlatildi' : 'Ishlatiladi'} (${fmt(s.qty, 0)} dona)</span><b>${fmt(r.used)} ${u}</b></div>`;
-        html += `<div class="live-row ${r.left < 0 ? 'neg' : 'pos'}"><span>${r.left < 0 ? 'Yetishmaydi' : 'Ortib qoladi'}</span><b>${fmt(Math.abs(r.left))} ${u}</b></div>`;
+      const r = materialRow(v, s.basis === 'auto' ? 0 : s.qty);
+      const u = r.unit;
+      let out = `<div class="live-row"><span>Jami narx</span><b>${money(r.total)}</b></div>`;
+      if (v.unit === 'kg' && num(v.metersPerKg) > 0) out += `<div class="live-row"><span>Jami metraj</span><b>${fmt(r.available)} m</b></div>`;
+      if (r.per > 0) {
+        out += `<div class="live-row"><span>1 kiyimga sarf</span><b>${fmt(r.per)} ${u} · ${money(r.perCost)}</b></div>`;
+        out += `<div class="live-row big"><span>Shundan chiqadi</span><b>${fmt(r.possible, 0)} dona</b></div>`;
+        const rest = r.available - r.possible * r.per;
+        out += `<div class="live-row"><span>Ortib qoladi</span><b>${fmt(rest)} ${u}</b></div>`;
+        if (r.used !== null) {
+          out += `<div class="live-row ${r.left < 0 ? 'neg' : ''}"><span>${s.isActual ? 'Olingan' : 'Rejadagi'} ${fmt(s.qty, 0)} donaga ${r.left < 0 ? 'yetishmaydi' : 'qoladi'}</span><b>${fmt(Math.abs(r.left))} ${u}</b></div>`;
+        }
       }
-      return html;
+      return out;
     },
     onSubmit: (v) => {
-      const finish = () => { if (mat) Object.assign(mat, v); else m.materials.push({ id: uid(), ...v }); };
-      if (v.shopId === '__new') {
-        v.shopId = '';
-        finish();
-        const target = mat || m.materials[m.materials.length - 1];
-        setTimeout(() => shopForm(null, (shop) => { target.shopId = shop.id; }), 50);
-        return;
-      }
-      finish();
+      if (v.unit !== 'kg') v.metersPerKg = '';
+      v.kind = kind;
+      const newShop = v.shopId === '__new';
+      if (newShop) v.shopId = '';
+      let target = mat;
+      if (mat) Object.assign(mat, v); else { target = { id: uid(), ...v }; m.materials.push(target); }
+      if (newShop) setTimeout(() => shopForm(null, (shop) => { target.shopId = shop.id; }), 50);
     },
     onDelete: mat ? () => {
-      if (!confirm('Bu materialni o\'chirasizmi?')) return false;
+      if (!confirm("O'chirasizmi?")) return false;
       m.materials = m.materials.filter((x) => x !== mat);
     } : null,
   });
 }
 
-function expenseForm(m, ex) {
+function workshopPickForm(m) {
   openForm({
-    title: ex ? 'Rasxodni tahrirlash' : "Boshqa rasxod qo'shish",
-    values: ex || { date: today() },
+    title: 'Qaysi sexda tikiladi',
+    values: m,
     fields: [
-      { name: 'name', label: 'Rasxod nomi', required: true, list: ['Transport / taksi', 'Qadoqlash (paket)', 'Etiketka / birka', 'Dazmol', 'Pechat / vishivka', 'Yuk tashish'], placeholder: 'Masalan: Taksi' },
-      { name: 'amount', label: 'Summa', type: 'number', required: true, suffix: "so'm" },
-      { name: 'date', label: 'Sana', type: 'date' },
-      { name: 'note', label: 'Izoh', type: 'textarea' },
+      { name: 'workshopId', label: 'Sex', type: 'select', options: wsOptions() },
+      { name: 'wsPaid', label: "Sexga to'langan pul", type: 'number', suffix: "so'm" },
     ],
-    onSubmit: (v) => { if (ex) Object.assign(ex, v); else m.expenses.push({ id: uid(), ...v }); },
-    onDelete: ex ? () => { if (!confirm("O'chirasizmi?")) return false; m.expenses = m.expenses.filter((x) => x !== ex); } : null,
+    onSubmit: (v) => {
+      const isNew = v.workshopId === '__new';
+      if (isNew) v.workshopId = '';
+      Object.assign(m, v);
+      if (isNew) setTimeout(() => workshopForm(null, (ws) => { m.workshopId = ws.id; }), 50);
+    },
   });
 }
 
-function workshopCostForm(m) {
+function wsLineForm(m, line) {
+  const q = modelSummary(m).qty;
   openForm({
-    title: 'Sex va tikuv narxi',
-    values: m,
+    title: line ? 'Kelishuvni tahrirlash' : "Sex bilan kelishuv qo'shish",
+    values: line || { name: WS_TYPES[0] },
     fields: [
-      { name: 'workshopId', label: 'Qaysi sexda tikiladi', type: 'select', options: wsOptions() },
-      { name: 'wsMode', label: 'Narx qanday kelishilgan', type: 'select', options: [{ value: 'split', label: 'Bichuvchi va tikuvchi alohida' }, { value: 'total', label: 'Umumiy usluga (1 donaga)' }] },
-      { name: 'cutPerItem', label: 'Bichuvchi — 1 donaga', type: 'number', half: true, suffix: "so'm" },
-      { name: 'sewPerItem', label: 'Tikuvchi — 1 donaga', type: 'number', half: true, suffix: "so'm" },
-      { name: 'servicePerItem', label: 'Umumiy usluga — 1 donaga', type: 'number', suffix: "so'm", hint: '"Umumiy usluga" tanlangan bo\'lsa shu narx ishlatiladi' },
-      { name: 'wsPaid', label: "Sexga to'langan pul", type: 'number', suffix: "so'm" },
+      { name: 'name', label: 'Ish turi', required: true, list: WS_TYPES, hint: "Usluga (to'liq), bichuv, tikuv yoki boshqa — o'zingiz yozishingiz ham mumkin" },
+      { name: 'price', label: '1 dona uchun narx', type: 'number', required: true, suffix: "so'm" },
+      { name: 'note', label: 'Izoh', type: 'textarea' },
+    ],
+    live: (v) => `<div class="live-row"><span>${fmt(q, 0)} dona uchun</span><b>${money(num(v.price) * q)}</b></div>`,
+    onSubmit: (v) => { if (line) Object.assign(line, v); else m.wsLines.push({ id: uid(), ...v }); },
+    onDelete: line ? () => { if (!confirm("O'chirasizmi?")) return false; m.wsLines = m.wsLines.filter((x) => x !== line); } : null,
+  });
+}
+
+function serviceForm(m, sv) {
+  const q = modelSummary(m).qty;
+  openForm({
+    title: sv ? 'Xizmatni tahrirlash' : "Qo'shimcha xizmat qo'shish",
+    values: sv || { mode: 'dona' },
+    fields: [
+      { name: 'name', label: 'Xizmat turi', required: true, list: SERVICES, placeholder: 'Dazmol, upakovka, dostavka, print...' },
+      { name: 'mode', label: 'Narx qanday', type: 'select', options: [{ value: 'dona', label: '1 dona uchun' }, { value: 'jami', label: 'Umumiy summa (bir martalik)' }] },
+      { name: 'price', label: (v) => (v.mode === 'jami' ? 'Umumiy summa' : '1 dona uchun narx'), type: 'number', required: true, suffix: "so'm" },
+      { name: 'who', label: 'Kim qiladi (ixtiyoriy)', placeholder: 'Usta ismi, sex, firma' },
     ],
     live: (v) => {
-      const per = v.wsMode === 'total' ? num(v.servicePerItem) : num(v.cutPerItem) + num(v.sewPerItem);
-      const q = modelSummary(m).qty;
-      return `<div class="live-row"><span>1 dona uchun sex</span><b>${money(per)}</b></div>
-        <div class="live-row"><span>Jami (${fmt(q, 0)} dona)</span><b>${money(per * q)}</b></div>`;
+      const total = v.mode === 'jami' ? num(v.price) : num(v.price) * q;
+      return `<div class="live-row"><span>Jami (${fmt(q, 0)} dona)</span><b>${money(total)}</b></div>
+        <div class="live-row"><span>1 donaga</span><b>${money(q ? total / q : 0)}</b></div>`;
     },
-    onSubmit: (v) => {
-      if (v.workshopId === '__new') {
-        v.workshopId = '';
-        Object.assign(m, v);
-        setTimeout(() => workshopForm(null, (ws) => { m.workshopId = ws.id; }), 50);
-        return;
-      }
-      Object.assign(m, v);
-    },
+    onSubmit: (v) => { if (sv) Object.assign(sv, v); else m.services.push({ id: uid(), ...v }); },
+    onDelete: sv ? () => { if (!confirm("O'chirasizmi?")) return false; m.services = m.services.filter((x) => x !== sv); } : null,
   });
 }
 
@@ -352,7 +422,7 @@ function receiptForm(m, r) {
     fields: [
       { name: 'qty', label: 'Nechta tayyor tovar oldingiz', type: 'number', required: true, suffix: 'dona' },
       { name: 'date', label: 'Sana', type: 'date' },
-      { name: 'note', label: 'Izoh', type: 'textarea', placeholder: "Brak, o'lcham bo'yicha taqsimot..." },
+      { name: 'note', label: 'Izoh', type: 'textarea', placeholder: "Brak, rang/o'lcham bo'yicha taqsimot..." },
     ],
     onSubmit: (v) => { if (r) Object.assign(r, v); else m.receipts.push({ id: uid(), ...v }); },
     onDelete: r ? () => { if (!confirm("O'chirasizmi?")) return false; m.receipts = m.receipts.filter((x) => x !== r); } : null,
@@ -362,19 +432,23 @@ function receiptForm(m, r) {
 function markupForm(m) {
   const s = modelSummary(m);
   openForm({
-    title: 'Sotuv narxi (marja)',
+    title: 'Sotuv narxi',
     values: m,
     fields: [
-      { name: 'markupType', label: 'Marja turi', type: 'select', options: [{ value: '%', label: 'Foiz (%)' }, { value: 'sum', label: "Summa (so'm) — 1 donaga" }] },
-      { name: 'markupValue', label: 'Tannarx ustiga qo\'yiladi', type: 'number', placeholder: '30' },
+      { name: 'markupType', label: 'Qanday belgilaysiz', type: 'select', options: [
+        { value: 'price', label: "Sotuv narxini o'zim yozaman" },
+        { value: 'sum', label: "Tannarx ustiga summa qo'yaman" },
+        { value: '%', label: "Tannarx ustiga foiz qo'yaman" },
+      ] },
+      { name: 'markupValue', label: (v) => ({ price: '1 dona sotuv narxi', sum: "Ustiga qo'yiladigan summa (1 donaga)", '%': "Ustiga qo'yiladigan foiz" }[v.markupType || '%']), type: 'number', suffix: '' },
     ],
     live: (v) => {
-      const val = num(v.markupValue);
-      const price = v.markupType === 'sum' ? s.unitCost + val : s.unitCost * (1 + val / 100);
+      const price = salePrice(s.unitCost, v.markupType, v.markupValue);
+      const unit = price - s.unitCost;
       return `<div class="live-row"><span>Tannarx (1 dona)</span><b>${money(s.unitCost)}</b></div>
         <div class="live-row"><span>Sotuv narxi</span><b>${money(price)}</b></div>
-        <div class="live-row pos"><span>1 donadan foyda</span><b>${money(price - s.unitCost)}</b></div>
-        <div class="live-row pos"><span>${fmt(s.qty, 0)} donadan foyda</span><b>${money(price * s.qty - s.totalCost)}</b></div>`;
+        <div class="live-row ${unit < 0 ? 'neg' : 'pos'}"><span>1 donadan foyda</span><b>${money(unit)}${s.unitCost ? ` (${fmt(unit / s.unitCost * 100, 1)}%)` : ''}</b></div>
+        <div class="live-row big ${unit < 0 ? 'neg' : 'pos'}"><span>${fmt(s.qty, 0)} donadan foyda</span><b>${money(price * s.qty - s.totalCost)}</b></div>`;
     },
     onSubmit: (v) => Object.assign(m, v),
   });
@@ -437,6 +511,7 @@ function recurringForm(r) {
 const statusChip = (st) => `<span class="chip st-${h(st)}">${h(STATUSES[st] || st)}</span>`;
 const kv = (label, value, cls = '') => `<div class="kv ${cls}"><span>${label}</span><b>${value}</b></div>`;
 const empty = (text, btn) => `<div class="empty"><p>${text}</p>${btn || ''}</div>`;
+const thumb = (m, cls = '') => `<div class="thumb ${cls}">${cover(m) ? `<img src="${h(cover(m))}" alt="">` : '👗'}${m.colorways.length > 1 ? `<span class="badge">${m.colorways.length}</span>` : ''}</div>`;
 
 function header(title, opts = {}) {
   return `<header class="top">
@@ -449,10 +524,10 @@ function header(title, opts = {}) {
 function modelCard(m) {
   const s = modelSummary(m);
   return `<a class="card model-card" href="#/model/${m.id}">
-    <div class="thumb">${m.photo ? `<img src="${h(m.photo)}" alt="">` : '👗'}</div>
+    ${thumb(m)}
     <div class="mc-body">
       <div class="mc-top"><b>${h(m.name)}</b>${statusChip(m.status)}</div>
-      <div class="mc-meta">${s.received ? `Olingan: ${fmt(s.received, 0)} · Sotilgan: ${fmt(s.sold, 0)} · Qoldiq: ${fmt(s.stock, 0)}` : `Reja: ${fmt(s.planned, 0)} dona${s.possibleOutput !== null ? ` · Mato yetadi: ${fmt(s.possibleOutput, 0)}` : ''}`}</div>
+      <div class="mc-meta">${s.received ? `Olingan: ${fmt(s.received, 0)} · Sotilgan: ${fmt(s.sold, 0)} · Qoldiq: ${fmt(s.stock, 0)}` : (s.possibleOutput !== null ? `Materialdan chiqadi: ${fmt(s.possibleOutput, 0)} dona` : 'Material kiritilmagan')}</div>
       <div class="mc-nums"><span>Tannarx <b>${money(s.unitCost)}</b></span><span>Sotuv <b>${money(s.price)}</b></span></div>
     </div>
   </a>`;
@@ -496,7 +571,7 @@ function viewDashboard() {
       </div>
     </section>
     <h2 class="sec">Faol fasonlar</h2>
-    ${active.length ? active.map(modelCard).join('') : empty("Hali fason qo'shilmagan. Birinchi fasoningizni qo'shing — keyin unga material, sex va sotuvlarni yozasiz.", '<button class="btn primary" data-act="new-model">+ Yangi fason</button>')}
+    ${active.length ? active.map(modelCard).join('') : empty("Hali fason qo'shilmagan. Fason qo'shing → rasvetkalar → mato → aksessuar → sex → xizmatlar → sotuv narxi.", '<button class="btn primary" data-act="new-model">+ Yangi fason</button>')}
   </main>`;
 }
 
@@ -520,119 +595,124 @@ function viewModel(id) {
   if (!m) return header('Topilmadi', { back: '#/models' }) + empty('Fason topilmadi');
   const s = modelSummary(m);
   const tab = ui.tab[id] || 'hisob';
-  const tabs = [['hisob', 'Hisob'], ['material', 'Material'], ['sex', 'Sex'], ['sotuv', 'Sotuv']];
+  const tabs = [['hisob', 'Hisob'], ['material', 'Material'], ['sex', 'Sex/Xizmat'], ['sotuv', 'Sotuv']];
   const body = { hisob: tabHisob, material: tabMaterial, sex: tabSex, sotuv: tabSotuv }[tab](m, s);
+  const cws = m.colorways.map((c) => `<button class="cw" data-act="edit-colorway" data-id="${m.id}" data-sub="${c.id}">
+      <img src="${h(c.photo)}" alt="" loading="lazy"><span>${h(c.color || 'rang?')}</span></button>`).join('');
   return header(m.name, { back: '#/models', right: `<button class="icon-btn" data-act="edit-model" data-id="${m.id}" aria-label="Tahrirlash">✎</button>` }) + `<main>
-    <section class="model-head">
-      <div class="thumb lg">${m.photo ? `<img src="${h(m.photo)}" alt="">` : '👗'}</div>
-      <div>
-        <div>${statusChip(m.status)}</div>
-        ${m.code ? `<div class="muted">Kod: ${h(m.code)}</div>` : ''}
-        ${m.sizes ? `<div class="muted">O'lcham: ${h(m.sizes)}</div>` : ''}
-        ${m.date ? `<div class="muted">${dateUz(m.date)}</div>` : ''}
-      </div>
-    </section>
+    <div class="model-meta">${statusChip(m.status)}${m.code ? `<span class="muted">Kod: ${h(m.code)}</span>` : ''}${m.sizes ? `<span class="muted">O'lcham: ${h(m.sizes)}</span>` : ''}${m.date ? `<span class="muted">${dateUz(m.date)}</span>` : ''}</div>
+    <div class="sec-row"><h2 class="sec">Rasvetkalar · ${m.colorways.length} ta</h2></div>
+    <div class="colorways">
+      ${cws}
+      <label class="cw cw-add"><span class="plus">＋</span><span>Rasm qo'shish</span><input type="file" accept="image/*" multiple data-colorways="${m.id}" hidden></label>
+    </div>
     <nav class="tabs">${tabs.map(([k, l]) => `<button class="${k === tab ? 'on' : ''}" data-act="tab" data-id="${m.id}" data-tab="${k}">${l}</button>`).join('')}</nav>
     ${body}
   </main>`;
 }
 
+function basisText(s) {
+  return {
+    received: `Sexdan olingan <b>${fmt(s.qty, 0)} dona</b> bo'yicha`,
+    planned: `Reja <b>${fmt(s.qty, 0)} dona</b> bo'yicha`,
+    auto: `Materialdan chiqadigan <b>${fmt(s.qty, 0)} dona</b> bo'yicha`,
+    none: 'Mato va sarfni kiriting — hisob avtomatik chiqadi',
+  }[s.basis];
+}
+
 function tabHisob(m, s) {
-  const basis = s.isActual ? `Sexdan olingan <b>${fmt(s.received, 0)} dona</b> bo'yicha` : `Reja <b>${fmt(s.planned, 0)} dona</b> bo'yicha (taxminiy)`;
-  const ws = byId('workshops', m.workshopId);
+  const lim = s.limiting;
+  const line = (label, perUnit, total, cls = '') => `<div class="tr ${cls}"><span>${label}</span><span>${money(perUnit)}</span><b>${money(total)}</b></div>`;
+  const q = s.qty || 1;
   return `
   <section class="card hero">
-    <div class="hero-title">1 dona tannarxi</div>
-    <div class="hero-big">${money(s.unitCost)}</div>
-    <div class="hero-sub">${basis}</div>
+    <div class="grid2 hero-top">
+      <div><div class="hero-title">Chiqadi</div><div class="hero-big">${s.possibleOutput !== null ? fmt(s.possibleOutput, 0) : '—'} <small>dona</small></div></div>
+      <div><div class="hero-title">1 dona tannarxi</div><div class="hero-big">${money(s.unitCost)}</div></div>
+    </div>
+    <div class="hero-sub">${basisText(s)}${lim && s.rows.length > 1 ? `. Eng kam chiqaradigan: <b>${h(lim.name)}${lim.color ? ' ' + h(lim.color) : ''}</b>` : ''}</div>
     <div class="grid2">
       ${kv('Sotuv narxi', money(s.price))}
       ${kv('1 donadan foyda', money(s.unitProfit), s.unitProfit < 0 ? 'neg' : 'pos')}
     </div>
-    <button class="btn ghost sm" data-act="markup" data-id="${m.id}">Marjani o'zgartirish (${m.markupType === 'sum' ? money(m.markupValue) : fmt(m.markupValue) + '%'})</button>
+    <button class="btn ghost sm" data-act="markup" data-id="${m.id}">Sotuv narxini belgilash</button>
   </section>
-  ${s.qty === 0 ? `<div class="warn">Hisoblash uchun "Reja: nechta tikiladi" ni kiriting yoki sexdan olingan tovar sonini yozing.</div>` : ''}
   ${s.possibleOutput !== null && s.planned > s.possibleOutput ? `<div class="warn">Diqqat: material faqat <b>${fmt(s.possibleOutput, 0)} dona</b>ga yetadi, reja esa ${fmt(s.planned, 0)} dona.</div>` : ''}
+  ${s.received > 0 && s.possibleOutput !== null && s.received < s.possibleOutput ? `<div class="info">Materialdan ${fmt(s.possibleOutput, 0)} dona chiqishi kerak edi, sexdan ${fmt(s.received, 0)} dona olindi (farq: ${fmt(s.possibleOutput - s.received, 0)}).</div>` : ''}
 
-  <h2 class="sec">Rasxodlar</h2>
+  <h2 class="sec">Hamma rasxodlar</h2>
   <section class="card table">
     <div class="th"><span></span><span>1 donaga</span><span>jami</span></div>
-    <div class="tr"><span>Material</span><span>${money(s.unitMaterial)}</span><b>${money(s.materialsTotal)}</b></div>
-    ${m.wsMode === 'total'
-      ? `<div class="tr"><span>Sex usluga</span><span>${money(m.servicePerItem)}</span><b>${money(s.workshopTotal)}</b></div>`
-      : `<div class="tr"><span>Bichuvchi</span><span>${money(m.cutPerItem)}</span><b>${money(s.cutTotal)}</b></div>
-         <div class="tr"><span>Tikuvchi</span><span>${money(m.sewPerItem)}</span><b>${money(s.sewTotal)}</b></div>`}
-    <div class="tr"><span>Boshqa rasxod</span><span>${money(s.unitOther)}</span><b>${money(s.otherTotal)}</b></div>
-    <div class="tr total"><span>JAMI</span><span>${money(s.unitCost)}</span><b>${money(s.totalCost)}</b></div>
-  </section>
-
-  <h2 class="sec">Soni</h2>
-  <section class="card grid2">
-    ${kv('Reja', fmt(s.planned, 0) + ' dona')}
-    ${kv('Material yetadi', s.possibleOutput !== null ? fmt(s.possibleOutput, 0) + ' dona' : '—')}
-    ${kv('Sexdan olindi', fmt(s.received, 0) + ' dona')}
-    ${kv('Sotildi', fmt(s.sold, 0) + ' dona')}
-    ${kv('Omborda qoldi', fmt(s.stock, 0) + ' dona', s.stock < 0 ? 'neg' : '')}
-    ${kv('Sex', ws ? `<a href="#/workshop/${ws.id}">${h(ws.name)}</a>` : '—')}
+    ${line('Mato', s.unitFabric, s.fabricTotal)}
+    ${line('Aksessuar / detal', s.unitAcc, s.accTotal)}
+    ${s.wsLines.map((l) => line('Sex: ' + h(l.name), l.price, l.total)).join('') || line('Sex', 0, 0)}
+    ${s.services.map((x) => line(h(x.name), x.total / q, x.total)).join('')}
+    ${line('JAMI', s.unitCost, s.totalCost, 'total')}
   </section>
 
   <h2 class="sec">Foyda</h2>
   <section class="card grid2">
-    ${kv('Sotuv tushumi', money(s.revenue))}
-    ${kv('Sotilganlardan foyda', money(s.profitSold), s.profitSold < 0 ? 'neg' : 'pos')}
     ${kv(`Hammasi sotilsa (${fmt(s.qty, 0)} dona)`, money(s.expectedProfit), s.expectedProfit < 0 ? 'neg' : 'pos')}
-    ${kv('Sexga qarz', money(s.wsDebt), s.wsDebt > 0 ? 'neg' : '')}
+    ${kv('Jami tushum bo\'ladi', money(s.price * s.qty))}
+    ${kv('Sotilganlardan foyda', money(s.profitSold), s.profitSold < 0 ? 'neg' : 'pos')}
+    ${kv('Sotildi / omborda', `${fmt(s.sold, 0)} / ${fmt(s.stock, 0)} dona`)}
   </section>
   ${s.leftValue > 0 ? `<div class="info">Ortib qolgan material qiymati: <b>${money(s.leftValue)}</b>. Uni boshqa ishga ishlatsangiz, 1 dona tannarx <b>${money(s.unitCostNet)}</b> bo'ladi.</div>` : ''}
   ${m.note ? `<div class="info">${h(m.note)}</div>` : ''}`;
 }
 
+function materialCard(m, r) {
+  const c = r.calc;
+  const shop = byId('shops', r.shopId);
+  const u = c.unit;
+  return `<div class="card item" data-act="edit-material" data-id="${m.id}" data-sub="${r.id}">
+    <div class="item-top"><b>${h(r.name)}</b>${r.color ? `<span class="chip">${h(r.color)}</span>` : ''}<span class="grow"></span><b>${money(c.total)}</b></div>
+    <div class="muted">${fmt(c.amount)} ${unitShort(r.unit)} × ${money(c.price)}${r.unit === 'kg' && num(r.metersPerKg) > 0 ? ` · ≈ ${fmt(c.available)} m` : ''}${r.date ? ' · ' + dateUz(r.date) : ''}</div>
+    ${shop ? `<div class="muted">🏪 ${h(shop.name)}${shop.market ? ', ' + h(shop.market) : ''}</div>` : '<div class="muted small">Do\'kon tanlanmagan</div>'}
+    ${c.per > 0 ? `<div class="parts-view">${(r.parts || []).filter((p) => num(p.per) > 0).map((p) => `<span>${h(p.name || 'Qism')}: <b>${fmt(p.per)} ${u}</b></span>`).join('')}</div>
+    <div class="usage">
+      <span>1 kiyimga: <b>${fmt(c.per)} ${u}</b></span>
+      <span>Chiqadi: <b>${fmt(c.possible, 0)} dona</b></span>
+      <span>1 donaga: <b>${money(c.perCost)}</b></span>
+      ${c.used !== null ? `<span class="${c.left < 0 ? 'neg' : 'pos'}">${c.left < 0 ? 'Yetishmaydi' : 'Qoladi'}: <b>${fmt(Math.abs(c.left))} ${u}</b></span>` : `<span>Ortadi: <b>${fmt(c.available - c.possible * c.per)} ${u}</b></span>`}
+    </div>` : `<div class="warn small">1 ta kiyimga sarfi kiritilmagan — bosib kiriting</div>`}
+  </div>`;
+}
+
 function tabMaterial(m, s) {
-  const rows = s.rows.map((r) => {
-    const c = r.calc;
-    const shop = byId('shops', r.shopId);
-    const u = unitShort(r.unit);
-    return `<div class="card item" data-act="edit-material" data-id="${m.id}" data-sub="${r.id}">
-      <div class="item-top"><b>${h(r.name)}</b>${r.color ? `<span class="chip">${h(r.color)}</span>` : ''}<span class="grow"></span><b>${money(c.total)}</b></div>
-      <div class="muted">${fmt(c.amount)} ${u} × ${money(c.price)}${r.date ? ' · ' + dateUz(r.date) : ''}</div>
-      ${shop ? `<div class="muted">🏪 ${h(shop.name)}${shop.market ? ', ' + h(shop.market) : ''}</div>` : ''}
-      ${c.per > 0 ? `<div class="usage">
-        <span>1 taga: <b>${fmt(c.per)} ${u}</b></span>
-        <span>Chiqadi: <b>${fmt(c.possible, 0)} dona</b></span>
-        ${c.used !== null ? `<span>Ishlatilgan: <b>${fmt(c.used)} ${u}</b></span>
-        <span class="${c.left < 0 ? 'neg' : 'pos'}">${c.left < 0 ? 'Yetishmaydi' : 'Qoldi'}: <b>${fmt(Math.abs(c.left))} ${u}</b></span>` : ''}
-      </div>` : `<div class="muted small">1 ta kiyimga sarfi kiritilmagan</div>`}
-    </div>`;
-  }).join('');
-  const ex = (m.expenses || []).map((e) => `<div class="card item row" data-act="edit-expense" data-id="${m.id}" data-sub="${e.id}">
-      <div><b>${h(e.name)}</b><div class="muted">${dateUz(e.date)}${e.note ? ' · ' + h(e.note) : ''}</div></div><b>${money(e.amount)}</b></div>`).join('');
   return `
-    <div class="sec-row"><h2 class="sec">Materiallar · ${money(s.materialsTotal)}</h2><button class="btn primary sm" data-act="add-material" data-id="${m.id}">+ Material</button></div>
-    ${rows || empty("Bozordan olingan mato, tugma, zamok, ip va boshqalarni shu yerga yozing.")}
-    <div class="sec-row"><h2 class="sec">Boshqa rasxodlar · ${money(s.otherTotal)}</h2><button class="btn sm" data-act="add-expense" data-id="${m.id}">+ Rasxod</button></div>
-    ${ex || empty('Transport, qadoq, etiketka va h.k.')}`;
+    <div class="sec-row"><h2 class="sec">Matolar · ${money(s.fabricTotal)}</h2><button class="btn primary sm" data-act="add-material" data-id="${m.id}" data-kind="mato">+ Mato</button></div>
+    ${s.fabrics.map((r) => materialCard(m, r)).join('') || empty("Bozordan olgan matolaringizni yozing: nomi, rangi, kg yoki metr narxi, qaysi do'kondan va kiyimning qaysi qismiga qancha ketishi.")}
+    <div class="sec-row"><h2 class="sec">Aksessuar va detallar · ${money(s.accTotal)}</h2><button class="btn primary sm" data-act="add-material" data-id="${m.id}" data-kind="aks">+ Aksessuar</button></div>
+    ${s.accessories.map((r) => materialCard(m, r)).join('') || empty('Tugma, zamok, rezinka, lenta, etiketka va boshqalar.')}`;
 }
 
 function tabSex(m, s) {
   const ws = byId('workshops', m.workshopId);
+  const q = s.qty;
+  const lines = s.wsLines.map((l) => `<div class="card item row" data-act="edit-wsline" data-id="${m.id}" data-sub="${l.id}">
+      <div><b>${h(l.name)}</b><div class="muted">${money(l.price)} × ${fmt(q, 0)} dona${l.note ? ' · ' + h(l.note) : ''}</div></div><b>${money(l.total)}</b></div>`).join('');
+  const svcs = s.services.map((x) => `<div class="card item row" data-act="edit-service" data-id="${m.id}" data-sub="${x.id}">
+      <div><b>${h(x.name)}</b><div class="muted">${x.mode === 'jami' ? 'Umumiy summa' : `${money(x.price)} × ${fmt(q, 0)} dona`}${x.who ? ' · ' + h(x.who) : ''}</div></div><b>${money(x.total)}</b></div>`).join('');
   const rec = (m.receipts || []).map((r) => `<div class="card item row" data-act="edit-receipt" data-id="${m.id}" data-sub="${r.id}">
       <div><b>${fmt(r.qty, 0)} dona</b><div class="muted">${dateUz(r.date)}${r.note ? ' · ' + h(r.note) : ''}</div></div><span class="muted">›</span></div>`).join('');
   return `
   <section class="card">
-    <div class="sec-row"><b>Sex</b><button class="btn sm" data-act="ws-cost" data-id="${m.id}">Tahrirlash</button></div>
-    ${ws ? `<div class="ws-box"><a href="#/workshop/${ws.id}"><b>${h(ws.name)}</b></a>${ws.address ? `<div class="muted">📍 ${h(ws.address)}</div>` : ''}${telLink(ws.phone)} ${telLink(ws.phone2)}</div>` : `<div class="muted">Sex tanlanmagan</div>`}
+    <div class="sec-row"><b>Sex</b><button class="btn sm" data-act="ws-pick" data-id="${m.id}">${ws ? 'O\'zgartirish' : 'Sex tanlash'}</button></div>
+    ${ws ? `<div class="ws-box"><a href="#/workshop/${ws.id}"><b>${h(ws.name)}</b></a>${ws.owner ? `<div>👤 ${h(ws.owner)}</div>` : ''}${ws.address ? `<div class="muted">📍 ${h(ws.address)}</div>` : ''}${telLink(ws.phone)} ${telLink(ws.phone2)}</div>` : `<div class="muted">Sex tanlanmagan</div>`}
     <div class="grid2">
-      ${m.wsMode === 'total'
-        ? kv('Umumiy usluga (1 dona)', money(m.servicePerItem))
-        : kv('Bichuvchi (1 dona)', money(m.cutPerItem)) + kv('Tikuvchi (1 dona)', money(m.sewPerItem))}
-      ${kv('Sex 1 donaga', money(s.wsItem))}
-      ${kv(`Sexga jami (${fmt(s.qty, 0)} dona)`, money(s.workshopTotal))}
+      ${kv('Sexga jami', money(s.workshopTotal))}
       ${kv("To'langan", money(s.wsPaid), 'pos')}
       ${kv('Qarz', money(s.wsDebt), s.wsDebt > 0 ? 'neg' : '')}
+      ${kv('Sex 1 donaga', money(s.wsItem))}
     </div>
   </section>
-  <div class="sec-row"><h2 class="sec">Sexdan olingan tayyor tovar · ${fmt(s.received, 0)} dona</h2><button class="btn primary sm" data-act="add-receipt" data-id="${m.id}">+ Qabul</button></div>
-  ${rec || empty("Sexdan tayyor tovarni olganingizda sonini shu yerga yozing. Shundan keyin hisob haqiqiy son bo'yicha qilinadi.")}`;
+  <div class="sec-row"><h2 class="sec">Sex bilan kelishuv · ${money(s.wsItem)}/dona</h2><button class="btn primary sm" data-act="add-wsline" data-id="${m.id}">+ Kelishuv</button></div>
+  ${lines || empty("Usluga (to'liq), bichuv, tikuv yoki boshqa — 1 dona uchun narxini yozing.")}
+  <div class="sec-row"><h2 class="sec">Qo'shimcha xizmatlar · ${money(s.servicesTotal)}</h2><button class="btn primary sm" data-act="add-service" data-id="${m.id}">+ Xizmat</button></div>
+  ${svcs || empty('Dazmol, upakovka, dostavka, print, vishivka, petlya va boshqalar.')}
+  <div class="sec-row"><h2 class="sec">Sexdan olingan tayyor tovar · ${fmt(s.received, 0)} dona</h2><button class="btn sm" data-act="add-receipt" data-id="${m.id}">+ Qabul</button></div>
+  ${rec || empty("Sexdan tovarni olganingizda sonini yozing — shundan keyin hisob haqiqiy son bo'yicha qilinadi.")}`;
 }
 
 function tabSotuv(m, s) {
@@ -645,23 +725,24 @@ function tabSotuv(m, s) {
       <div class="small ${pr < 0 ? 'neg' : 'pos'}">Foyda: ${money(pr)}</div>
     </div>`;
   }).join('');
+  const mk = m.markupType === 'price' ? "O'zim yozgan narx" : m.markupType === 'sum' ? '+' + money(m.markupValue) : '+' + fmt(m.markupValue) + '%';
   return `
   <section class="card grid2">
     ${kv('Tannarx (1 dona)', money(s.unitCost))}
     ${kv('Sotuv narxi', money(s.price))}
-    ${kv('Marja', m.markupType === 'sum' ? money(m.markupValue) : fmt(m.markupValue) + '%')}
+    ${kv('Belgilash', mk)}
     ${kv('1 donadan foyda', money(s.unitProfit), s.unitProfit < 0 ? 'neg' : 'pos')}
+    ${kv(`Hammasi sotilsa (${fmt(s.qty, 0)})`, money(s.expectedProfit), s.expectedProfit < 0 ? 'neg' : 'pos')}
     ${kv('Omborda', fmt(s.stock, 0) + ' dona')}
-    ${kv('Sotilganlardan foyda', money(s.profitSold), s.profitSold < 0 ? 'neg' : 'pos')}
   </section>
-  <div class="quick"><button class="btn" data-act="markup" data-id="${m.id}">Marjani o'zgartirish</button><button class="btn primary" data-act="add-sale" data-id="${m.id}">+ Sotuv</button></div>
-  <h2 class="sec">Sotuvlar · ${fmt(s.sold, 0)} dona · ${money(s.revenue)}</h2>
+  <div class="quick"><button class="btn" data-act="markup" data-id="${m.id}">Sotuv narxini belgilash</button><button class="btn primary" data-act="add-sale" data-id="${m.id}">+ Sotuv</button></div>
+  <h2 class="sec">Sotuvlar · ${fmt(s.sold, 0)} dona · ${money(s.revenue)} · foyda ${money(s.profitSold)}</h2>
   ${sales || empty("Do'konga topshirgan yoki sotgan tovaringizni shu yerga yozing.")}`;
 }
 
 function viewShops() {
   const list = state.shops.map((sh) => {
-    const purchases = state.models.flatMap((m) => m.materials.filter((x) => x.shopId === sh.id));
+    const purchases = allMaterials().filter((x) => x.shopId === sh.id);
     const total = sum(purchases, (x) => num(x.qty) * num(x.price));
     return `<div class="card item">
       <a href="#/shop/${sh.id}" class="item-top"><b>${h(sh.name)}</b><span class="grow"></span><span class="muted">${purchases.length} ta xarid</span></a>
@@ -671,7 +752,7 @@ function viewShops() {
   }).join('');
   return header("Do'konlar") + `<main>
     <div class="sec-row"><h2 class="sec">Bozordagi do'konlar</h2><button class="btn primary sm" data-act="new-shop">+ Do'kon</button></div>
-    ${list || empty("Mato, furnitura olgan do'konlaringiz manzili va raqamini shu yerda saqlang.")}
+    ${list || empty("Mato, aksessuar olgan do'konlaringiz manzili va raqamini shu yerda saqlang.")}
   </main>`;
 }
 
@@ -702,13 +783,14 @@ function viewWorkshops() {
     const debt = sum(ms, (m) => Math.max(0, modelSummary(m).wsDebt));
     return `<div class="card item">
       <a href="#/workshop/${ws.id}" class="item-top"><b>${h(ws.name)}</b><span class="grow"></span><span class="muted">${ms.length} fason</span></a>
+      ${ws.owner ? `<div>👤 ${h(ws.owner)}</div>` : ''}
       ${ws.address ? `<div class="muted">📍 ${h(ws.address)}</div>` : ''}
       <div class="row">${telLink(ws.phone)}${debt > 0 ? `<span class="neg">Qarz: ${money(debt)}</span>` : ''}</div>
     </div>`;
   }).join('');
   return header('Sexlar') + `<main>
     <div class="sec-row"><h2 class="sec">Tikuv sexlari</h2><button class="btn primary sm" data-act="new-workshop">+ Sex</button></div>
-    ${list || empty('Bichuv va tikuv sexlaringiz manzili, raqami shu yerda turadi.')}
+    ${list || empty('Sexlar manzili, tikuvchi ismi va raqami shu yerda turadi.')}
   </main>`;
 }
 
@@ -722,25 +804,25 @@ function viewWorkshop(id) {
     total += s.workshopTotal; paid += s.wsPaid; items += s.received;
     return `<a class="card item" href="#/model/${m.id}">
       <div class="item-top"><b>${h(m.name)}</b>${statusChip(m.status)}</div>
-      <div class="muted">Olingan: ${fmt(s.received, 0)} dona · 1 donaga: ${money(s.wsItem)}</div>
+      <div class="muted">${s.wsLines.map((l) => `${h(l.name)}: ${money(l.price)}`).join(' · ') || 'Kelishuv yozilmagan'}</div>
       <div class="row"><span>Jami: <b>${money(s.workshopTotal)}</b></span><span class="${s.wsDebt > 0 ? 'neg' : 'pos'}">Qarz: ${money(s.wsDebt)}</span></div>
     </a>`;
   }).join('');
   return header(ws.name, { back: '#/workshops', right: `<button class="icon-btn" data-act="edit-workshop" data-id="${id}">✎</button>` }) + `<main>
     <section class="card">
-      ${ws.owner ? kv("Mas'ul", h(ws.owner)) : ''}
+      ${ws.owner ? kv('Tikuvchi / mas\'ul', h(ws.owner)) : ''}
       ${ws.address ? kv('Manzil', h(ws.address)) : ''}
       <div class="row">${telLink(ws.phone)} ${telLink(ws.phone2)}</div>
       ${ws.note ? `<div class="muted">${h(ws.note)}</div>` : ''}
     </section>
     <section class="card grid2">
-      ${kv('Tikilgan', fmt(items, 0) + ' dona')}
+      ${kv('Olingan tovar', fmt(items, 0) + ' dona')}
       ${kv('Jami ish haqi', money(total))}
       ${kv("To'langan", money(paid), 'pos')}
       ${kv('Qarz', money(total - paid), total - paid > 0 ? 'neg' : '')}
     </section>
     <h2 class="sec">Shu sexdagi fasonlar</h2>
-    ${cards || empty("Fason sahifasidagi \"Sex\" bo'limidan shu sexni tanlang")}
+    ${cards || empty("Fason sahifasidagi \"Sex/Xizmat\" bo'limidan shu sexni tanlang")}
   </main>`;
 }
 
@@ -765,10 +847,7 @@ function viewMonthly() {
       <div class="tr"><span>− Oylik rasxodlar</span><b>${money(r.overhead)}</b></div>
       <div class="tr total"><span>= Toza foyda</span><b class="${r.netProfit < 0 ? 'neg' : 'pos'}">${money(r.netProfit)}</b></div>
     </section>
-    <section class="card grid2">
-      ${kv('Shu oy materialga sarflandi', money(r.purchases))}
-      ${kv('Shu oy boshqa rasxod', money(r.otherSpent))}
-    </section>
+    <section class="card">${kv('Shu oy mato va aksessuarga sarflandi', money(r.purchases))}</section>
     <div class="sec-row"><h2 class="sec">Oylik rasxodlar · ${money(r.overhead)}</h2><button class="btn primary sm" data-act="new-overhead">+ Rasxod</button></div>
     ${items || empty('Ijara, ish haqi, transport, telefon kabi oylik to\'lovlarni shu yerga yozing.')}
     <div class="sec-row"><h2 class="sec">Doimiy rasxodlar (har oy)</h2><button class="btn sm" data-act="new-recurring">+ Doimiy</button></div>
@@ -827,7 +906,7 @@ function render() {
   const section = { model: '#/models', shop: '#/shops', workshop: '#/workshops' }[route] || '#/' + (route || '');
   $('#nav').innerHTML = NAV.map(([href, icon, label]) => `<a href="${href}" class="${href === section || (href === '#/' && !route) ? 'on' : ''}"><span>${icon}</span>${label}</a>`).join('');
   if (route === 'models') renderList();
-  if (sameRoute) window.scrollTo(0, scroll); else window.scrollTo(0, 0);
+  window.scrollTo(0, sameRoute ? scroll : 0);
   if (route === 'settings' && deferredInstall) $('#install-btn').hidden = false;
 }
 
@@ -845,15 +924,19 @@ const actions = {
     await commit();
     toast("O'chirildi");
   },
-  'clear-photo': (d) => { $('#' + d.id).value = ''; $('#' + d.id + '_prev').hidden = true; },
+  'add-part': () => { $('.parts').insertAdjacentHTML('beforeend', partRow({ name: '', per: '' })); $('.parts .part-row:last-child input').focus(); },
+  'del-part': (d, el) => { el.closest('.part-row').remove(); updateLive(); },
   'new-model': () => modelForm(null),
   'edit-model': (d) => modelForm(model(d.id)),
+  'edit-colorway': (d) => { const m = model(d.id); colorwayForm(m, findSub(m.colorways, d.sub)); },
   tab: (d) => { ui.tab[d.id] = d.tab; render(); },
-  'add-material': (d) => materialForm(model(d.id)),
+  'add-material': (d) => materialForm(model(d.id), null, d.kind),
   'edit-material': (d) => { const m = model(d.id); materialForm(m, findSub(m.materials, d.sub)); },
-  'add-expense': (d) => expenseForm(model(d.id)),
-  'edit-expense': (d) => { const m = model(d.id); expenseForm(m, findSub(m.expenses, d.sub)); },
-  'ws-cost': (d) => workshopCostForm(model(d.id)),
+  'ws-pick': (d) => workshopPickForm(model(d.id)),
+  'add-wsline': (d) => wsLineForm(model(d.id)),
+  'edit-wsline': (d) => { const m = model(d.id); wsLineForm(m, findSub(m.wsLines, d.sub)); },
+  'add-service': (d) => serviceForm(model(d.id)),
+  'edit-service': (d) => { const m = model(d.id); serviceForm(m, findSub(m.services, d.sub)); },
   'add-receipt': (d) => receiptForm(model(d.id)),
   'edit-receipt': (d) => { const m = model(d.id); receiptForm(m, findSub(m.receipts, d.sub)); },
   markup: (d) => markupForm(model(d.id)),
@@ -899,7 +982,7 @@ document.addEventListener('click', (e) => {
   if (!el) return;
   if (e.target.closest('a.tel')) return;
   const fn = actions[el.dataset.act];
-  if (fn) { e.preventDefault(); fn(el.dataset); }
+  if (fn) { e.preventDefault(); fn(el.dataset, el); }
 });
 
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && currentForm) closeForm(); });
