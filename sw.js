@@ -1,5 +1,5 @@
 // Offline ishlash uchun service worker. Yangi versiya chiqarilganda VERSION ni oshiring.
-const VERSION = 'v2';
+const VERSION = 'v3';
 const CACHE = 'fason-hisob-' + VERSION;
 const FILES = [
   './', './index.html', './css/style.css', './js/app.js', './js/calc.js', './js/store.js',

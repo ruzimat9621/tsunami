@@ -34,7 +34,7 @@ const ACCESSORIES = ['Tugma', 'Zamok', 'Rezinka', 'Lenta', 'Kant', 'Etiketka', '
 const telLink = (p) => (p ? `<a class="tel" href="tel:${h(String(p).replace(/[^\d+]/g, ''))}">📞 ${h(p)}</a>` : '');
 
 let state = null;
-const ui = { tab: {}, month: thisMonth(), search: '' };
+const ui = { tab: {}, open: {}, month: thisMonth(), search: '' };
 
 async function commit() {
   await saveState(state);
@@ -302,35 +302,77 @@ function colorwayForm(m, cw) {
     values: cw,
     fields: [
       { name: 'photo', label: 'Rasm', type: 'photo', big: true },
-      { name: 'color', label: 'Rangi / nomi', list: knownColors(), placeholder: 'Masalan: Qora, Bej, Olivka' },
+      { name: 'color', label: 'Rangi / nomi', list: knownColors(), placeholder: 'Masalan: Bardo, Choko, Qora' },
+      { name: 'plannedQty', label: 'Bu rasvetkadan reja (ixtiyoriy)', type: 'number', suffix: 'dona', hint: "Bo'sh qoldirsangiz — materialidan nechta chiqishi olinadi" },
       { name: 'note', label: 'Izoh', type: 'textarea' },
     ],
     onSubmit: (v) => Object.assign(cw, v),
-    onDelete: () => { if (!confirm("Bu rasvetkani o'chirasizmi?")) return false; m.colorways = m.colorways.filter((x) => x !== cw); },
+    onDelete: () => {
+      const own = m.materials.filter((x) => x.colorwayId === cw.id);
+      if (!confirm(own.length ? `Bu rasvetka va uning ${own.length} ta materiali o'chadi. Davom etasizmi?` : "Bu rasvetkani o'chirasizmi?")) return false;
+      m.colorways = m.colorways.filter((x) => x !== cw);
+      m.materials = m.materials.filter((x) => x.colorwayId !== cw.id);
+    },
   });
 }
 
-function materialForm(m, mat, kind = mat?.kind || 'mato') {
+// Boshqa rasvetkaning materiallarini nusxalash (10 ta rasvetkaga qayta yozmaslik uchun)
+function copyMaterialsForm(m, target) {
+  const sources = m.colorways.filter((c) => c !== target && m.materials.some((x) => x.colorwayId === c.id));
+  if (!sources.length) { toast("Avval bitta rasvetkaga material kiriting"); return; }
+  openForm({
+    title: `Nusxa olish → ${cwLabel(m, target)}`,
+    values: { from: sources[0].id, qtyMode: 'keep' },
+    fields: [
+      { name: 'from', label: 'Qaysi rasvetkadan', type: 'select', options: sources.map((c) => ({ value: c.id, label: cwLabel(m, c) })) },
+      { name: 'qtyMode', label: 'Olingan miqdor', type: 'select', options: [{ value: 'keep', label: 'Shundayligicha nusxalansin' }, { value: 'empty', label: "Bo'sh qolsin (keyin o'zim yozaman)" }] },
+    ],
+    live: (v) => {
+      const list = m.materials.filter((x) => x.colorwayId === v.from);
+      return `<div class="muted">Nusxalanadi: ${list.map((x) => h(x.name)).join(', ')}.<br>Matolarning rangi bo'sh qoladi — har biriga shu rasvetka rangini yozing.</div>`;
+    },
+    submitText: 'Nusxa olish',
+    onSubmit: (v) => {
+      for (const x of m.materials.filter((y) => y.colorwayId === v.from)) {
+        m.materials.push({
+          ...structuredClone(x), id: uid(), colorwayId: target.id,
+          color: x.kind !== 'aks' ? '' : x.color,
+          qty: v.qtyMode === 'empty' ? '' : x.qty,
+        });
+      }
+    },
+  });
+}
+
+const cwLabel = (m, cw) => `${m.colorways.indexOf(cw) + 1}. ${cw.color || 'Rasvetka'}`;
+const cwOptions = (m, emptyLabel) => [{ value: '', label: emptyLabel }, ...m.colorways.map((c) => ({ value: c.id, label: cwLabel(m, c) }))];
+
+function materialForm(m, mat, kind = mat?.kind || 'mato', colorwayId = mat?.colorwayId || '') {
   const isAcc = kind === 'aks';
   const s = modelSummary(m);
   const unitOf = (v) => (v.unit === 'kg' ? (num(v.metersPerKg) > 0 ? 'm' : 'kg') : unitShort(v.unit));
+  const groupQty = (cwId) => {
+    const g = s.split ? s.groups.find((x) => x.id === cwId) : s.groups[0];
+    return g && g.basis !== 'auto' ? g.qty : 0;
+  };
   openForm({
-    title: (mat ? 'Tahrirlash: ' : "Qo'shish: ") + (isAcc ? 'aksessuar / detal' : 'mato'),
-    values: mat || { unit: isAcc ? 'dona' : 'm', date: today(), parts: [{ name: "To'liq", per: '' }] },
+    title: (mat ? 'Tahrirlash: ' : "Qo'shish: ") + (isAcc ? 'aksessuar / detal' : 'material'),
+    values: mat || { unit: isAcc ? 'dona' : 'm', date: today(), colorwayId, parts: [{ name: isAcc ? "To'liq" : '', per: '' }] },
     fields: [
-      { name: 'name', label: isAcc ? 'Aksessuar nomi' : 'Mato nomi', required: true, list: isAcc ? [...new Set([...ACCESSORIES, ...knownNames('aks')])] : knownNames('mato'), placeholder: isAcc ? 'Tugma, zamok, rezinka...' : 'Shtapel, krep, futer...' },
-      { name: 'color', label: 'Rangi', half: true, list: knownColors(), placeholder: 'Qora, oq...' },
-      { name: 'unit', label: "Narxi nimaga", type: 'select', half: true, options: Object.entries(isAcc ? ACC_UNITS : FABRIC_UNITS).map(([value, label]) => ({ value, label: label + 'ga' })) },
-      { name: 'shopId', label: "Qaysi do'kondan", type: 'select', options: shopOptions() },
+      ...(m.colorways.length ? [{ name: 'colorwayId', label: 'Qaysi rasvetka uchun', type: 'select', options: cwOptions(m, 'Hamma rasvetkalar uchun (umumiy)') }] : []),
+      { name: 'name', label: isAcc ? 'Aksessuar nomi' : 'Material nomi', required: true, list: isAcc ? [...new Set([...ACCESSORIES, ...knownNames('aks')])] : [...new Set(['Astar', ...knownNames('mato')])], placeholder: isAcc ? 'Tugma, zamok, rezinka...' : 'Futer, krep, astar...' },
+      { name: 'color', label: 'Rangi', half: true, list: knownColors(), placeholder: 'Bardoviy, choko...' },
+      { name: 'unit', label: 'Narxi nimaga', type: 'select', half: true, options: Object.entries(isAcc ? ACC_UNITS : FABRIC_UNITS).map(([value, label]) => ({ value, label: label + 'ga' })) },
       { name: 'qty', label: (v) => `Olingan miqdor (${unitShort(v.unit)})`, type: 'number', required: true, half: true },
       { name: 'price', label: (v) => `1 ${unitShort(v.unit)} narxi`, type: 'number', required: true, half: true, suffix: "so'm" },
-      { name: 'metersPerKg', label: '1 kg dan necha metr chiqadi', type: 'number', showIf: (v) => v.unit === 'kg', hint: "Ixtiyoriy. Kiritsangiz, sarfni metrda yozasiz (masalan 1 kg ≈ 3,2 m). Kiritmasangiz — sarf kg da." },
-      { name: 'parts', label: (v) => `1 ta kiyimga sarfi (${unitOf(v)}) — qaysi qismga`, type: 'parts', hint: isAcc ? 'Masalan: Tepa — 6 (tugma), Ishton — 1 (zamok)' : "Masalan: Tepa — 1,7, Ishton — 1. Yoki To'liq — 2,7" },
+      { name: 'metersPerKg', label: '1 kg da necha metr bor (metraj)', type: 'number', suffix: 'metr', showIf: (v) => v.unit === 'kg', hint: "Masalan 3,2. Sotuvchidan so'rang yoki o'lchang. Yozsangiz, sarfni metrda kiritasiz va jami metraj hisoblanadi." },
+      { name: 'shopId', label: "Qaysi do'kondan", type: 'select', options: shopOptions() },
+      { name: 'parts', label: (v) => `1 ta kiyimga sarfi (${unitOf(v)}) — qaysi qismga`, type: 'parts', hint: isAcc ? 'Masalan: Tepa — 6 (tugma), Ishton — 1 (zamok)' : "Masalan: Tepa — 1,7 yoki Ishton — 1. Bir mato ikkala qismga ketsa, ikkala qatorni yozing." },
       { name: 'date', label: 'Sana', type: 'date' },
       { name: 'note', label: 'Izoh', type: 'textarea', placeholder: 'Eni, sifati, partiya...' },
     ],
     live: (v) => {
-      const r = materialRow(v, s.basis === 'auto' ? 0 : s.qty);
+      const r = materialRow(v, v.colorwayId ? groupQty(v.colorwayId) : (s.basis === 'auto' ? 0 : s.qty));
       const u = r.unit;
       let out = `<div class="live-row"><span>Jami narx</span><b>${money(r.total)}</b></div>`;
       if (v.unit === 'kg' && num(v.metersPerKg) > 0) out += `<div class="live-row"><span>Jami metraj</span><b>${fmt(r.available)} m</b></div>`;
@@ -340,7 +382,7 @@ function materialForm(m, mat, kind = mat?.kind || 'mato') {
         const rest = r.available - r.possible * r.per;
         out += `<div class="live-row"><span>Ortib qoladi</span><b>${fmt(rest)} ${u}</b></div>`;
         if (r.used !== null) {
-          out += `<div class="live-row ${r.left < 0 ? 'neg' : ''}"><span>${s.isActual ? 'Olingan' : 'Rejadagi'} ${fmt(s.qty, 0)} donaga ${r.left < 0 ? 'yetishmaydi' : 'qoladi'}</span><b>${fmt(Math.abs(r.left))} ${u}</b></div>`;
+          out += `<div class="live-row ${r.left < 0 ? 'neg' : ''}"><span>${fmt(r.used / r.per, 0)} donaga ${r.left < 0 ? 'yetishmaydi' : 'qoladi'}</span><b>${fmt(Math.abs(r.left))} ${u}</b></div>`;
         }
       }
       return out;
@@ -416,10 +458,12 @@ function serviceForm(m, sv) {
 }
 
 function receiptForm(m, r) {
+  const split = modelSummary(m).split;
   openForm({
     title: r ? 'Qabulni tahrirlash' : 'Sexdan tayyor tovar olish',
     values: r || { date: today() },
     fields: [
+      ...(split ? [{ name: 'colorwayId', label: 'Qaysi rasvetka', type: 'select', required: true, options: cwOptions(m, '— Tanlang —') }] : []),
       { name: 'qty', label: 'Nechta tayyor tovar oldingiz', type: 'number', required: true, suffix: 'dona' },
       { name: 'date', label: 'Sana', type: 'date' },
       { name: 'note', label: 'Izoh', type: 'textarea', placeholder: "Brak, rang/o'lcham bo'yicha taqsimot..." },
@@ -460,6 +504,7 @@ function saleForm(m, sale) {
     title: sale ? 'Sotuvni tahrirlash' : 'Sotuv yozish',
     values: sale || { date: today(), price: Math.round(s.price) },
     fields: [
+      ...(s.split ? [{ name: 'colorwayId', label: 'Qaysi rasvetka', type: 'select', options: cwOptions(m, 'Aralash / ko\'rsatilmagan') }] : []),
       { name: 'qty', label: 'Nechta sotildi / topshirildi', type: 'number', required: true, half: true, suffix: 'dona' },
       { name: 'price', label: '1 dona narxi', type: 'number', required: true, half: true, suffix: "so'm" },
       { name: 'where', label: 'Kimga / qaysi do\'konga', list: [...new Set(state.models.flatMap((x) => x.sales.map((y) => y.where)).filter(Boolean))] },
@@ -468,8 +513,10 @@ function saleForm(m, sale) {
     ],
     live: (v) => {
       const rev = num(v.qty) * num(v.price);
-      const pr = rev - num(v.qty) * s.unitCost;
-      return `<div class="live-row"><span>Tushum</span><b>${money(rev)}</b></div>
+      const uc = s.unitCostFor(v.colorwayId);
+      const pr = rev - num(v.qty) * uc;
+      return `<div class="live-row"><span>Tannarx (1 dona)</span><b>${money(uc)}</b></div>
+        <div class="live-row"><span>Tushum</span><b>${money(rev)}</b></div>
         <div class="live-row ${pr < 0 ? 'neg' : 'pos'}"><span>Shu sotuvdan foyda</span><b>${money(pr)}</b></div>`;
     },
     onSubmit: (v) => { if (sale) Object.assign(sale, v); else m.sales.push({ id: uid(), ...v }); },
@@ -597,8 +644,9 @@ function viewModel(id) {
   const tab = ui.tab[id] || 'hisob';
   const tabs = [['hisob', 'Hisob'], ['material', 'Material'], ['sex', 'Sex/Xizmat'], ['sotuv', 'Sotuv']];
   const body = { hisob: tabHisob, material: tabMaterial, sex: tabSex, sotuv: tabSotuv }[tab](m, s);
+  const gq = new Map(s.split ? s.groups.map((g) => [g.id, g.qty]) : []);
   const cws = m.colorways.map((c) => `<button class="cw" data-act="edit-colorway" data-id="${m.id}" data-sub="${c.id}">
-      <img src="${h(c.photo)}" alt="" loading="lazy"><span>${h(c.color || 'rang?')}</span></button>`).join('');
+      <img src="${h(c.photo)}" alt="" loading="lazy"><span>${h(c.color || 'rang?')}</span>${gq.has(c.id) ? `<small>${fmt(gq.get(c.id), 0)} dona</small>` : ''}</button>`).join('');
   return header(m.name, { back: '#/models', right: `<button class="icon-btn" data-act="edit-model" data-id="${m.id}" aria-label="Tahrirlash">✎</button>` }) + `<main>
     <div class="model-meta">${statusChip(m.status)}${m.code ? `<span class="muted">Kod: ${h(m.code)}</span>` : ''}${m.sizes ? `<span class="muted">O'lcham: ${h(m.sizes)}</span>` : ''}${m.date ? `<span class="muted">${dateUz(m.date)}</span>` : ''}</div>
     <div class="sec-row"><h2 class="sec">Rasvetkalar · ${m.colorways.length} ta</h2></div>
@@ -616,6 +664,7 @@ function basisText(s) {
     received: `Sexdan olingan <b>${fmt(s.qty, 0)} dona</b> bo'yicha`,
     planned: `Reja <b>${fmt(s.qty, 0)} dona</b> bo'yicha`,
     auto: `Materialdan chiqadigan <b>${fmt(s.qty, 0)} dona</b> bo'yicha`,
+    mixed: `Har rasvetka o'z soni bo'yicha, jami <b>${fmt(s.qty, 0)} dona</b>`,
     none: 'Mato va sarfni kiriting — hisob avtomatik chiqadi',
   }[s.basis];
 }
@@ -630,16 +679,17 @@ function tabHisob(m, s) {
       <div><div class="hero-title">Chiqadi</div><div class="hero-big">${s.possibleOutput !== null ? fmt(s.possibleOutput, 0) : '—'} <small>dona</small></div></div>
       <div><div class="hero-title">1 dona tannarxi</div><div class="hero-big">${money(s.unitCost)}</div></div>
     </div>
-    <div class="hero-sub">${basisText(s)}${lim && s.rows.length > 1 ? `. Eng kam chiqaradigan: <b>${h(lim.name)}${lim.color ? ' ' + h(lim.color) : ''}</b>` : ''}</div>
+    <div class="hero-sub">${basisText(s)}${lim && s.rows.length > 1 ? `. Eng kam chiqaradigan: <b>${h(lim.name)}${lim.color ? ' ' + h(lim.color) : ''}</b>` : ''}${s.split ? `. ${s.groups.length} ta rasvetka alohida hisoblandi, tannarx — o'rtacha` : ''}</div>
     <div class="grid2">
-      ${kv('Sotuv narxi', money(s.price))}
-      ${kv('1 donadan foyda', money(s.unitProfit), s.unitProfit < 0 ? 'neg' : 'pos')}
+      ${kv(s.split && m.markupType !== 'price' ? "Sotuv narxi (o'rtacha)" : 'Sotuv narxi', money(s.price))}
+      ${kv(s.split ? "1 donadan foyda (o'rtacha)" : '1 donadan foyda', money(s.unitProfit), s.unitProfit < 0 ? 'neg' : 'pos')}
     </div>
     <button class="btn ghost sm" data-act="markup" data-id="${m.id}">Sotuv narxini belgilash</button>
   </section>
   ${s.possibleOutput !== null && s.planned > s.possibleOutput ? `<div class="warn">Diqqat: material faqat <b>${fmt(s.possibleOutput, 0)} dona</b>ga yetadi, reja esa ${fmt(s.planned, 0)} dona.</div>` : ''}
   ${s.received > 0 && s.possibleOutput !== null && s.received < s.possibleOutput ? `<div class="info">Materialdan ${fmt(s.possibleOutput, 0)} dona chiqishi kerak edi, sexdan ${fmt(s.received, 0)} dona olindi (farq: ${fmt(s.possibleOutput - s.received, 0)}).</div>` : ''}
 
+  ${colorwayTable(m, s)}
   <h2 class="sec">Hamma rasxodlar</h2>
   <section class="card table">
     <div class="th"><span></span><span>1 donaga</span><span>jami</span></div>
@@ -661,12 +711,32 @@ function tabHisob(m, s) {
   ${m.note ? `<div class="info">${h(m.note)}</div>` : ''}`;
 }
 
+function colorwayTable(m, s) {
+  if (!s.split) return '';
+  const rows = s.groups.map((g) => `<div class="tr">
+      <span class="cw-name"><img src="${h(g.cw.photo)}" alt="">${g.index + 1}. ${h(g.name)}</span>
+      <span>${fmt(g.qty, 0)}</span>
+      <span>${money(g.unitCost)}</span>
+      <b class="${g.unitProfit < 0 ? 'neg' : 'pos'}">${money(g.unitProfit)}</b>
+    </div>`).join('');
+  const missing = m.colorways.filter((c) => !s.groups.some((g) => g.id === c.id));
+  return `<h2 class="sec">Rasvetkalar bo'yicha</h2>
+  <section class="card table cw-table">
+    <div class="th"><span></span><span>dona</span><span>tannarx</span><span>foyda/dona</span></div>
+    ${rows}
+    <div class="tr total"><span>JAMI</span><span>${fmt(s.qty, 0)}</span><span>${money(s.unitCost)}</span><b>${money(s.expectedProfit)}</b></div>
+  </section>
+  ${missing.length ? `<div class="warn small">Materiali kiritilmagan rasvetkalar: ${missing.map((c) => h(cwLabel(m, c))).join(', ')}. Ular hisobga kirmadi.</div>` : ''}
+  ${s.untaggedReceipts > 0 ? `<div class="warn small">${fmt(s.untaggedReceipts, 0)} dona qabulda rasvetka ko'rsatilmagan — tahrirlab rasvetkani tanlang.</div>` : ''}
+  ${s.sharedPossible !== null && s.limiting ? `<div class="warn small">Umumiy "${h(s.limiting.name)}" faqat ${fmt(s.sharedPossible, 0)} donaga yetadi.</div>` : ''}`;
+}
+
 function materialCard(m, r) {
   const c = r.calc;
   const shop = byId('shops', r.shopId);
   const u = c.unit;
   return `<div class="card item" data-act="edit-material" data-id="${m.id}" data-sub="${r.id}">
-    <div class="item-top"><b>${h(r.name)}</b>${r.color ? `<span class="chip">${h(r.color)}</span>` : ''}<span class="grow"></span><b>${money(c.total)}</b></div>
+    <div class="item-top"><b>${h(r.name)}</b>${r.color ? `<span class="chip">${h(r.color)}</span>` : r.kind !== 'aks' && r.colorwayId ? '<span class="chip warn-chip">rangini yozing</span>' : ''}<span class="grow"></span><b>${money(c.total)}</b></div>
     <div class="muted">${fmt(c.amount)} ${unitShort(r.unit)} × ${money(c.price)}${r.unit === 'kg' && num(r.metersPerKg) > 0 ? ` · ≈ ${fmt(c.available)} m` : ''}${r.date ? ' · ' + dateUz(r.date) : ''}</div>
     ${shop ? `<div class="muted">🏪 ${h(shop.name)}${shop.market ? ', ' + h(shop.market) : ''}</div>` : '<div class="muted small">Do\'kon tanlanmagan</div>'}
     ${c.per > 0 ? `<div class="parts-view">${(r.parts || []).filter((p) => num(p.per) > 0).map((p) => `<span>${h(p.name || 'Qism')}: <b>${fmt(p.per)} ${u}</b></span>`).join('')}</div>
@@ -680,11 +750,46 @@ function materialCard(m, r) {
 }
 
 function tabMaterial(m, s) {
-  return `
-    <div class="sec-row"><h2 class="sec">Matolar · ${money(s.fabricTotal)}</h2><button class="btn primary sm" data-act="add-material" data-id="${m.id}" data-kind="mato">+ Mato</button></div>
-    ${s.fabrics.map((r) => materialCard(m, r)).join('') || empty("Bozordan olgan matolaringizni yozing: nomi, rangi, kg yoki metr narxi, qaysi do'kondan va kiyimning qaysi qismiga qancha ketishi.")}
+  // Rasvetka yo'q — oddiy ro'yxat
+  if (!m.colorways.length) {
+    return `
+    <div class="sec-row"><h2 class="sec">Matolar · ${money(s.fabricTotal)}</h2><button class="btn primary sm" data-act="add-material" data-id="${m.id}" data-kind="mato">+ Material</button></div>
+    ${s.fabrics.map((r) => materialCard(m, r)).join('') || empty("Mato, astar va boshqa materiallarni yozing: nomi, rangi, kg yoki metr narxi, do'kon va kiyimning qaysi qismiga qancha ketishi.<br><br>Rasvetka rasmlarini qo'shsangiz, har bir rasvetkaga alohida material yozasiz.")}
     <div class="sec-row"><h2 class="sec">Aksessuar va detallar · ${money(s.accTotal)}</h2><button class="btn primary sm" data-act="add-material" data-id="${m.id}" data-kind="aks">+ Aksessuar</button></div>
     ${s.accessories.map((r) => materialCard(m, r)).join('') || empty('Tugma, zamok, rezinka, lenta, etiketka va boshqalar.')}`;
+  }
+  const groupsById = new Map(s.groups.map((g) => [g.id, g]));
+  const sections = m.colorways.map((cw, i) => {
+    const g = s.split ? groupsById.get(cw.id) : null;
+    const rows = s.rows.filter((r) => r.colorwayId === cw.id);
+    const key = m.id + ':' + cw.id;
+    const open = ui.open[key] ?? (i === 0 || !rows.length);
+    return `<details class="cw-group" data-key="${key}" ${open ? 'open' : ''}>
+      <summary>
+        <img src="${h(cw.photo)}" alt="">
+        <div class="grow"><b>${i + 1}. ${h(cw.color || 'Rasvetka')}</b>
+          <div class="muted small">${g ? `Chiqadi: <b>${fmt(g.possible ?? 0, 0)} dona</b> · Tannarx: <b>${money(g.unitCost)}</b>` : rows.length ? '' : 'Material kiritilmagan'}</div>
+        </div><span class="chev">›</span>
+      </summary>
+      ${rows.map((r) => materialCard(m, r)).join('')}
+      ${g?.limiting && rows.length > 1 ? `<div class="muted small pad">Eng kam chiqaradigan: <b>${h(g.limiting.name)}</b></div>` : ''}
+      <div class="quick">
+        <button class="btn primary sm" data-act="add-material" data-id="${m.id}" data-kind="mato" data-cw="${cw.id}">+ Material</button>
+        <button class="btn sm" data-act="add-material" data-id="${m.id}" data-kind="aks" data-cw="${cw.id}">+ Aksessuar</button>
+        ${m.colorways.length > 1 ? `<button class="btn ghost sm" data-act="copy-materials" data-id="${m.id}" data-cw="${cw.id}">⧉ Nusxa olish</button>` : ''}
+      </div>
+    </details>`;
+  }).join('');
+  const shared = s.split ? s.sharedRows : s.rows.filter((r) => !r.colorwayId || !m.colorways.some((c) => c.id === r.colorwayId));
+  return `
+    <div class="info small">Har bir rasvetkaga o'z materialini yozing: masalan tepasi uchun bardoviy, ishtoni uchun choko, astar. Hamma rasvetkada bir xil narsalar (tugma, zamok) — pastdagi "Umumiy" bo'limiga.</div>
+    ${sections}
+    <div class="sec-row"><h2 class="sec">Umumiy — hamma rasvetkalar uchun · ${money(sum(shared, (r) => r.calc.total))}</h2></div>
+    ${shared.map((r) => materialCard(m, r)).join('') || empty('Masalan: tugma, zamok, etiketka — hamma rasvetkaga bir xil ketadigan narsalar.')}
+    <div class="quick">
+      <button class="btn sm" data-act="add-material" data-id="${m.id}" data-kind="mato" data-cw="">+ Umumiy material</button>
+      <button class="btn primary sm" data-act="add-material" data-id="${m.id}" data-kind="aks" data-cw="">+ Umumiy aksessuar</button>
+    </div>`;
 }
 
 function tabSex(m, s) {
@@ -695,7 +800,7 @@ function tabSex(m, s) {
   const svcs = s.services.map((x) => `<div class="card item row" data-act="edit-service" data-id="${m.id}" data-sub="${x.id}">
       <div><b>${h(x.name)}</b><div class="muted">${x.mode === 'jami' ? 'Umumiy summa' : `${money(x.price)} × ${fmt(q, 0)} dona`}${x.who ? ' · ' + h(x.who) : ''}</div></div><b>${money(x.total)}</b></div>`).join('');
   const rec = (m.receipts || []).map((r) => `<div class="card item row" data-act="edit-receipt" data-id="${m.id}" data-sub="${r.id}">
-      <div><b>${fmt(r.qty, 0)} dona</b><div class="muted">${dateUz(r.date)}${r.note ? ' · ' + h(r.note) : ''}</div></div><span class="muted">›</span></div>`).join('');
+      <div><b>${fmt(r.qty, 0)} dona</b>${(() => { const c = m.colorways.find((y) => y.id === r.colorwayId); return c ? ` <span class="chip">${h(cwLabel(m, c))}</span>` : ''; })()}<div class="muted">${dateUz(r.date)}${r.note ? ' · ' + h(r.note) : ''}</div></div><span class="muted">›</span></div>`).join('');
   return `
   <section class="card">
     <div class="sec-row"><b>Sex</b><button class="btn sm" data-act="ws-pick" data-id="${m.id}">${ws ? 'O\'zgartirish' : 'Sex tanlash'}</button></div>
@@ -718,10 +823,11 @@ function tabSex(m, s) {
 function tabSotuv(m, s) {
   const sales = (m.sales || []).slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')).map((x) => {
     const rev = num(x.qty) * num(x.price);
-    const pr = rev - num(x.qty) * s.unitCost;
+    const pr = rev - num(x.qty) * s.unitCostFor(x.colorwayId);
+    const cw = m.colorways.find((c) => c.id === x.colorwayId);
     return `<div class="card item" data-act="edit-sale" data-id="${m.id}" data-sub="${x.id}">
       <div class="item-top"><b>${fmt(x.qty, 0)} dona × ${money(x.price)}</b><span class="grow"></span><b>${money(rev)}</b></div>
-      <div class="muted">${dateUz(x.date)}${x.where ? ' · ' + h(x.where) : ''}</div>
+      <div class="muted">${dateUz(x.date)}${cw ? ' · ' + h(cwLabel(m, cw)) : ''}${x.where ? ' · ' + h(x.where) : ''}</div>
       <div class="small ${pr < 0 ? 'neg' : 'pos'}">Foyda: ${money(pr)}</div>
     </div>`;
   }).join('');
@@ -930,7 +1036,8 @@ const actions = {
   'edit-model': (d) => modelForm(model(d.id)),
   'edit-colorway': (d) => { const m = model(d.id); colorwayForm(m, findSub(m.colorways, d.sub)); },
   tab: (d) => { ui.tab[d.id] = d.tab; render(); },
-  'add-material': (d) => materialForm(model(d.id), null, d.kind),
+  'add-material': (d) => materialForm(model(d.id), null, d.kind, d.cw || ''),
+  'copy-materials': (d) => { const m = model(d.id); copyMaterialsForm(m, findSub(m.colorways, d.cw)); },
   'edit-material': (d) => { const m = model(d.id); materialForm(m, findSub(m.materials, d.sub)); },
   'ws-pick': (d) => workshopPickForm(model(d.id)),
   'add-wsline': (d) => wsLineForm(model(d.id)),
@@ -984,6 +1091,8 @@ document.addEventListener('click', (e) => {
   const fn = actions[el.dataset.act];
   if (fn) { e.preventDefault(); fn(el.dataset, el); }
 });
+
+document.addEventListener('toggle', (e) => { if (e.target.dataset?.key) ui.open[e.target.dataset.key] = e.target.open; }, true);
 
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && currentForm) closeForm(); });
 

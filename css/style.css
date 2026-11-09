@@ -274,3 +274,22 @@ textarea { resize: vertical; }
 .live-row.big { font-size: 16px; padding-top: 6px; }
 .warn.small { font-size: 13px; padding: 8px 10px; margin: 8px 0 0; }
 .tabs button { font-size: 13px; }
+
+/* Rasvetka bo'yicha materiallar */
+.cw small { color: var(--primary); font-weight: 700; font-size: 11px; }
+.cw-group { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 12px 8px; margin: 10px 0; }
+.cw-group summary { display: flex; align-items: center; gap: 10px; padding: 8px 0; cursor: pointer; list-style: none; }
+.cw-group summary::-webkit-details-marker { display: none; }
+.cw-group summary img { width: 44px; height: 58px; object-fit: cover; border-radius: 8px; flex: none; }
+.cw-group .chev { font-size: 24px; color: var(--muted); transition: transform .15s; }
+.cw-group[open] .chev { transform: rotate(90deg); }
+.cw-group .card { margin: 8px 0; background: var(--bg); }
+.cw-group .quick { margin: 8px 0 4px; }
+.pad { padding: 0 2px; }
+.info.small { font-size: 13px; }
+.table.cw-table { grid-template-columns: 1fr auto auto auto; }
+.cw-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.cw-name img { width: 26px; height: 34px; object-fit: cover; border-radius: 5px; flex: none; }
+.cw-table .tr > * { font-size: 13px; }
+.warn-chip { background: var(--warn-bg); color: var(--warn); }
+.usage b { white-space: nowrap; }

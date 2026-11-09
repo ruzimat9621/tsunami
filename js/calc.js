@@ -51,28 +51,72 @@ export function serviceTotal(s, qty) {
   return s.mode === 'jami' ? num(s.price) : num(s.price) * qty;
 }
 
+const minPossible = (rows) => {
+  const lim = rows.filter((r) => r.calc.possible !== null);
+  if (!lim.length) return { possible: null, limiting: null };
+  const limiting = lim.reduce((a, b) => (b.calc.possible < a.calc.possible ? b : a));
+  return { possible: limiting.calc.possible, limiting };
+};
+
+// Fason hisobi. Rasvetkaning o'z materiallari bo'lsa — har bir rasvetka alohida guruh bo'lib hisoblanadi.
+// colorwayId bo'sh materiallar "umumiy" (hamma rasvetkalar uchun, masalan tugma, zamok).
 export function modelSummary(m) {
+  const all = (m.materials || []).map((x) => ({ ...x }));
+  const cws = m.colorways || [];
+  const receipts = m.receipts || [];
   const received = receivedQty(m);
   const planned = num(m.plannedQty);
 
-  const all = m.materials || [];
-  const preRows = all.map((x) => ({ ...x, calc: materialRow(x, 0) }));
-  const limits = preRows.filter((r) => r.calc.possible !== null);
-  const possibleOutput = limits.length ? Math.min(...limits.map((r) => r.calc.possible)) : null;
-  const limiting = limits.length ? limits.reduce((a, b) => (b.calc.possible < a.calc.possible ? b : a)) : null;
+  let groups = cws
+    .map((cw, i) => ({ id: cw.id, cw, index: i, name: cw.color || `Rasvetka ${i + 1}`, mats: all.filter((x) => x.colorwayId && x.colorwayId === cw.id) }))
+    .filter((g) => g.mats.length);
+  const split = groups.length > 0;
+  const inGroup = new Set(groups.flatMap((g) => g.mats));
+  const shared = split ? all.filter((x) => !inGroup.has(x)) : [];
+  if (!split) groups = [{ id: '', cw: null, index: -1, name: '', mats: all }];
 
-  // Hisob uchun son: sexdan olingan → reja → materialdan avtomatik chiqadigan
-  let qty = 0, basis = 'none';
-  if (received > 0) { qty = received; basis = 'received'; }
-  else if (planned > 0) { qty = planned; basis = 'planned'; }
-  else if (possibleOutput) { qty = possibleOutput; basis = 'auto'; }
+  // Har bir guruh uchun son: sexdan olingan → reja → materialdan avtomatik chiqadigan
+  for (const g of groups) {
+    const pre = g.mats.map((x) => ({ ...x, calc: materialRow(x, 0) }));
+    Object.assign(g, minPossible(pre));
+    g.received = split ? sum(receipts.filter((r) => r.colorwayId === g.id), (r) => num(r.qty)) : received;
+    g.planned = split ? num(g.cw.plannedQty) : planned;
+    if (g.received > 0) { g.qty = g.received; g.basis = 'received'; }
+    else if (g.planned > 0) { g.qty = g.planned; g.basis = 'planned'; }
+    else if (g.possible) { g.qty = g.possible; g.basis = 'auto'; }
+    else { g.qty = 0; g.basis = 'none'; }
+  }
+  const qty = sum(groups, (g) => g.qty);
+  const basisSet = new Set(groups.filter((g) => g.qty > 0).map((g) => g.basis));
+  const basis = !qty ? 'none' : basisSet.size === 1 ? [...basisSet][0] : 'mixed';
 
-  const rows = all.map((x) => ({ ...x, calc: materialRow(x, qty) }));
+  // Material qatorlari: guruh materiallari o'z soni bilan, umumiylari jami son bilan
+  const qtyOf = new Map();
+  for (const g of groups) for (const x of g.mats) qtyOf.set(x, g.qty);
+  for (const x of shared) qtyOf.set(x, qty);
+  const rows = all.map((x) => Object.assign(x, { calc: materialRow(x, qtyOf.get(x) || 0) }));
+  for (const g of groups) g.rows = g.mats;
+  const sharedRows = shared;
+
+  const shareLim = minPossible(sharedRows);
+  let possibleOutput, limiting;
+  if (!split) ({ possible: possibleOutput, limiting } = groups[0]);
+  else {
+    const gp = groups.filter((g) => g.possible !== null);
+    possibleOutput = gp.length ? sum(gp, (g) => g.possible) : null;
+    limiting = null;
+    if (shareLim.possible !== null && (possibleOutput === null || shareLim.possible < possibleOutput)) {
+      possibleOutput = shareLim.possible;
+      limiting = shareLim.limiting;
+    }
+  }
+
   const fabrics = rows.filter((r) => r.kind !== 'aks');
   const accessories = rows.filter((r) => r.kind === 'aks');
   const fabricTotal = sum(fabrics, (r) => r.calc.total);
   const accTotal = sum(accessories, (r) => r.calc.total);
   const materialsTotal = fabricTotal + accTotal;
+  const sharedTotal = sum(sharedRows, (r) => r.calc.total);
   const leftValue = sum(rows, (r) => r.calc.leftValue);
 
   const wsLines = (m.wsLines || []).map((l) => ({ ...l, total: num(l.price) * qty }));
@@ -81,27 +125,43 @@ export function modelSummary(m) {
 
   const services = (m.services || []).map((s) => ({ ...s, total: serviceTotal(s, qty) }));
   const servicesTotal = sum(services, (s) => s.total);
+  const svcPerItem = sum(services.filter((s) => s.mode !== 'jami'), (s) => num(s.price));
+  const svcFixed = sum(services.filter((s) => s.mode === 'jami'), (s) => num(s.price));
 
   const totalCost = materialsTotal + workshopTotal + servicesTotal;
   const per = (v) => (qty > 0 ? v / qty : 0);
   const unitCost = per(totalCost);
   const unitCostNet = per(totalCost - leftValue);
-
   const price = salePrice(unitCost, m.markupType, m.markupValue);
-  const unitProfit = price - unitCost;
+
+  // Har bir rasvetka (guruh) tannarxi: o'z materiali + sex + xizmat + umumiy materialning ulushi
+  for (const g of groups) {
+    g.ownTotal = sum(g.rows, (r) => r.calc.total);
+    g.share = qty > 0 ? g.qty / qty : 0;
+    g.cost = g.ownTotal + g.qty * (wsItem + svcPerItem) + (sharedTotal + svcFixed) * g.share;
+    g.unitCost = g.qty > 0 ? g.cost / g.qty : 0;
+    g.price = salePrice(g.unitCost, m.markupType, m.markupValue);
+    g.unitProfit = g.price - g.unitCost;
+    g.expectedProfit = g.price * g.qty - g.cost;
+  }
+  const byGroup = new Map(groups.map((g) => [g.id, g]));
+  const unitCostFor = (colorwayId) => (split && byGroup.has(colorwayId) ? byGroup.get(colorwayId).unitCost : unitCost);
 
   const sold = soldQty(m);
   const revenue = sum(m.sales, (s) => num(s.qty) * num(s.price));
   const stock = received - sold;
-  const profitSold = revenue - unitCost * sold;
-  const expectedProfit = price * qty - totalCost;
+  const profitSold = sum(m.sales, (s) => num(s.qty) * (num(s.price) - unitCostFor(s.colorwayId)));
+  const expectedProfit = sum(groups, (g) => g.expectedProfit);
+  const unitProfit = qty > 0 ? expectedProfit / qty : price - unitCost;
   const wsPaid = num(m.wsPaid);
   const wsDebt = workshopTotal - wsPaid;
+  const untaggedReceipts = split ? received - sum(groups, (g) => g.received) : 0;
 
   return {
     received, planned, qty, basis, isActual: basis === 'received',
+    split, groups, sharedRows, sharedTotal, sharedPossible: shareLim.possible, untaggedReceipts,
     rows, fabrics, accessories, fabricTotal, accTotal, materialsTotal, leftValue,
-    possibleOutput, limiting,
+    possibleOutput, limiting, unitCostFor,
     wsLines, wsItem, workshopTotal, services, servicesTotal, totalCost,
     unitCost, unitCostNet,
     unitFabric: per(fabricTotal), unitAcc: per(accTotal), unitServices: per(servicesTotal),
@@ -121,7 +181,7 @@ export function monthReport(state, ym) {
       if (!inMonth(sale.date, ym)) continue;
       const q = num(sale.qty);
       revenue += q * num(sale.price);
-      cogs += q * s.unitCost;
+      cogs += q * s.unitCostFor(sale.colorwayId);
       soldCount += q;
     }
     for (const mat of m.materials || []) {

@@ -132,3 +132,56 @@ test('eski versiya ma\'lumotlari yangi tuzilmaga o\'tadi', () => {
   assert.equal(m.services[0].mode, 'jami');
   assert.equal(modelSummary(m).possibleOutput, 5);
 });
+
+test('rasvetkalar alohida: bardo (tepa bardoviy + ishton choko + astar), qora; tugma umumiy', () => {
+  const m = {
+    colorways: [{ id: 'b', color: 'Bardo' }, { id: 'q', color: 'Qora' }, { id: 'x', color: 'Materialsiz' }],
+    materials: [
+      { colorwayId: 'b', kind: 'mato', name: 'Bardoviy', unit: 'kg', qty: 10, price: 90000, metersPerKg: 3, parts: [{ name: 'Tepa', per: 1.5 }] }, // 30 m → 20, 900 000
+      { colorwayId: 'b', kind: 'mato', name: 'Choko', unit: 'm', qty: 25, price: 20000, parts: [{ name: 'Ishton', per: 1 }] }, // 25, 500 000
+      { colorwayId: 'b', kind: 'mato', name: 'Astar', unit: 'm', qty: 20, price: 10000, parts: [{ name: 'Tepa', per: 0.8 }] }, // 25, 200 000
+      { colorwayId: 'q', kind: 'mato', name: 'Qora', unit: 'm', qty: 50, price: 30000, parts: [{ name: "To'liq", per: 2.5 }] }, // 20, 1 500 000
+      { kind: 'aks', name: 'Tugma', unit: 'dona', qty: 300, price: 500, parts: [{ name: 'Tepa', per: 6 }] }, // umumiy: 50, 150 000
+    ],
+    wsLines: [{ name: 'Usluga', price: 30000 }],
+    services: [{ name: 'Dostavka', price: 200000, mode: 'jami' }],
+    markupType: 'price', markupValue: 250000,
+    receipts: [], sales: [{ qty: 10, price: 250000, colorwayId: 'b', date: '2026-11-05' }],
+  };
+  const s = modelSummary(m);
+  assert.equal(s.split, true);
+  assert.equal(s.groups.length, 2);
+  const [b, q] = s.groups;
+  assert.equal(b.possible, 20); // eng kam: bardoviy 20
+  assert.equal(b.limiting.name, 'Bardoviy');
+  assert.equal(q.possible, 20);
+  assert.equal(s.possibleOutput, 40);
+  assert.equal(s.qty, 40);
+  assert.equal(s.sharedPossible, 50);
+  // Bardo: 1 600 000 o'z materiali + 20*30000 sex + (150000 tugma + 200000 dostavka) * 0.5
+  assert.equal(b.cost, 1_600_000 + 600_000 + 175_000);
+  assert.equal(b.unitCost, 2_375_000 / 20);
+  assert.equal(q.cost, 1_500_000 + 600_000 + 175_000);
+  assert.equal(s.totalCost, b.cost + q.cost);
+  assert.equal(b.price, 250000);
+  assert.equal(s.profitSold, 10 * (250000 - b.unitCost));
+  assert.equal(monthReport({ models: [m] }, '2026-11').cogs, 10 * b.unitCost);
+});
+
+test('rasvetka bo\'yicha qabul qilingan son ishlatiladi; umumiy material yetmasa cheklaydi', () => {
+  const m = {
+    colorways: [{ id: 'a' }, { id: 'c' }],
+    materials: [
+      { colorwayId: 'a', unit: 'm', qty: 100, price: 1, parts: [{ per: 2 }] },
+      { colorwayId: 'c', unit: 'm', qty: 100, price: 1, parts: [{ per: 2 }] },
+      { kind: 'aks', unit: 'dona', qty: 60, price: 1, parts: [{ per: 1 }] },
+    ],
+    receipts: [{ qty: 45, colorwayId: 'a' }],
+  };
+  const s = modelSummary(m);
+  assert.equal(s.groups[0].qty, 45);
+  assert.equal(s.groups[0].basis, 'received');
+  assert.equal(s.groups[1].qty, 50);
+  assert.equal(s.possibleOutput, 60); // 50+50=100, lekin zamok faqat 60 ga yetadi
+  assert.equal(s.limiting.kind, 'aks');
+});
