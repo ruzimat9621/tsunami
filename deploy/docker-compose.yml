@@ -1,5 +1,7 @@
 # Fason hisob — serverda ishga tushirish (Docker).
-# HTTPS sertifikatini Caddy avtomatik oladi (Let's Encrypt).
+# app: ilova + server (faqat serverning ichida 127.0.0.1:8090 da ochiq).
+# caddy: 80/443 portlari bo'sh bo'lsa — avtomatik HTTPS (profile: caddy).
+#        Serverda nginx bo'lsa, install.sh nginx orqali ulaydi.
 services:
   app:
     image: node:22-alpine
@@ -8,6 +10,8 @@ services:
     environment:
       - PORT=8080
       - DATA_DIR=/data
+    ports:
+      - "127.0.0.1:8090:8080"
     volumes:
       - ..:/app:ro          # ilova va server kodi (git dan)
       - ../data:/data       # ma'lumotlar bazasi va kunlik zaxiralar
@@ -15,6 +19,7 @@ services:
 
   caddy:
     image: caddy:2
+    profiles: ["caddy"]
     ports:
       - "80:80"
       - "443:443"
