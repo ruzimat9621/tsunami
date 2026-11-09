@@ -30,9 +30,9 @@ Bitta kod: **web**da ishlaydi, **iPhone** va **Android**ga ilova sifatida o'rnat
    **Android (Chrome):** ⋮ → "Ilovani o'rnatish".
 
 ## Joylash (bepul, GitHub Pages)
-1. Ushbu o'zgarishlarni `main` branchga birlashtiring (merge).
-2. GitHub → **Settings → Pages → Source: GitHub Actions**.
-3. Bir necha daqiqadan keyin ilova `https://<username>.github.io/<repo>/` manzilida ochiladi.
+1. GitHub → **Settings → Pages → Source: Deploy from a branch**.
+2. Branch: **main**, papka: **/ (root)** → **Save**.
+3. 1–2 daqiqadan keyin ilova `https://<username>.github.io/<repo>/` manzilida ochiladi. `main` ga har bir o'zgarish avtomatik chiqadi.
 
 > Eslatma: bepul rejada GitHub Pages faqat **public** repository uchun ishlaydi. Repo private bo'lsa — uni public qiling yoki Netlify / Cloudflare Pages / Vercel'ga papkani shundayicha yuklang (build kerak emas).
 
