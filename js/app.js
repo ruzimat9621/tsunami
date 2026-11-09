@@ -282,7 +282,7 @@ function modelForm(m) {
     onSubmit: (v) => {
       if (m) Object.assign(m, v);
       else {
-        const nm = { id: uid(), colorways: [], materials: [], wsLines: [], services: [], receipts: [], sales: [], markupType: '%', markupValue: 30, ...v };
+        const nm = { id: uid(), colorways: [], materials: [], wsLines: [], services: [], extras: [], receipts: [], sales: [], markupType: '%', markupValue: 30, ...v };
         state.models.unshift(nm);
         location.hash = '#/model/' + nm.id;
       }
@@ -455,6 +455,34 @@ function serviceForm(m, sv) {
     onSubmit: (v) => { if (sv) Object.assign(sv, v); else m.services.push({ id: uid(), ...v }); },
     onDelete: sv ? () => { if (!confirm("O'chirasizmi?")) return false; m.services = m.services.filter((x) => x !== sv); } : null,
   });
+}
+
+const EXTRA_NAMES = ['Arava (bozordan chiqarish)', 'Taksi', 'Yuk tashish', 'Hammol', 'Ovqat', 'Paket / qop', 'Parkovka'];
+
+function extraForm(m, ex) {
+  openForm({
+    title: ex ? 'Harajatni tahrirlash' : "Qo'shimcha harajat",
+    values: ex || { date: today() },
+    fields: [
+      { name: 'name', label: 'Nima uchun', required: true, list: EXTRA_NAMES, placeholder: 'Masalan: Arava' },
+      { name: 'amount', label: 'Summa', type: 'number', required: true, suffix: "so'm", placeholder: '20000' },
+      { name: 'date', label: 'Sana', type: 'date' },
+      { name: 'note', label: 'Izoh', type: 'textarea' },
+    ],
+    live: (v) => {
+      const q = modelSummary(m).qty;
+      return q ? `<div class="live-row"><span>1 donaga (${fmt(q, 0)} dona)</span><b>${money(num(v.amount) / q)}</b></div>` : '';
+    },
+    onSubmit: (v) => { if (ex) Object.assign(ex, v); else (m.extras ||= []).push({ id: uid(), ...v }); },
+    onDelete: ex ? () => { if (!confirm("O'chirasizmi?")) return false; m.extras = m.extras.filter((x) => x !== ex); } : null,
+  });
+}
+
+function extrasSection(m, s) {
+  const list = s.extras.map((e) => `<div class="card item row" data-act="edit-extra" data-id="${m.id}" data-sub="${e.id}">
+      <div><b>${h(e.name)}</b><div class="muted">${dateUz(e.date)}${e.note ? ' · ' + h(e.note) : ''}</div></div><b>${money(e.amount)}</b></div>`).join('');
+  return `<div class="sec-row"><h2 class="sec">Qo'shimcha harajatlar · ${money(s.extrasTotal)}</h2><button class="btn primary sm" data-act="add-extra" data-id="${m.id}">+ Harajat</button></div>
+    ${list || empty('Arava (bozordan chiqarish), taksi, yuk tashish va boshqa mayda harajatlar — hammasi tannarxga qo\'shiladi.')}`;
 }
 
 function receiptForm(m, r) {
@@ -697,9 +725,11 @@ function tabHisob(m, s) {
     ${line('Aksessuar / detal', s.unitAcc, s.accTotal)}
     ${s.wsLines.map((l) => line('Sex: ' + h(l.name), l.price, l.total)).join('') || line('Sex', 0, 0)}
     ${s.services.map((x) => line(h(x.name), x.total / q, x.total)).join('')}
+    ${s.extrasTotal ? line("Qo'shimcha harajatlar", s.extrasTotal / q, s.extrasTotal) : ''}
     ${line('JAMI', s.unitCost, s.totalCost, 'total')}
   </section>
 
+  <button class="btn ghost sm" data-act="add-extra" data-id="${m.id}">+ Qo'shimcha harajat (arava, taksi...)</button>
   <h2 class="sec">Foyda</h2>
   <section class="card grid2">
     ${kv(`Hammasi sotilsa (${fmt(s.qty, 0)} dona)`, money(s.expectedProfit), s.expectedProfit < 0 ? 'neg' : 'pos')}
@@ -756,7 +786,8 @@ function tabMaterial(m, s) {
     <div class="sec-row"><h2 class="sec">Matolar · ${money(s.fabricTotal)}</h2><button class="btn primary sm" data-act="add-material" data-id="${m.id}" data-kind="mato">+ Material</button></div>
     ${s.fabrics.map((r) => materialCard(m, r)).join('') || empty("Mato, astar va boshqa materiallarni yozing: nomi, rangi, kg yoki metr narxi, do'kon va kiyimning qaysi qismiga qancha ketishi.<br><br>Rasvetka rasmlarini qo'shsangiz, har bir rasvetkaga alohida material yozasiz.")}
     <div class="sec-row"><h2 class="sec">Aksessuar va detallar · ${money(s.accTotal)}</h2><button class="btn primary sm" data-act="add-material" data-id="${m.id}" data-kind="aks">+ Aksessuar</button></div>
-    ${s.accessories.map((r) => materialCard(m, r)).join('') || empty('Tugma, zamok, rezinka, lenta, etiketka va boshqalar.')}`;
+    ${s.accessories.map((r) => materialCard(m, r)).join('') || empty('Tugma, zamok, rezinka, lenta, etiketka va boshqalar.')}
+    ${extrasSection(m, s)}`;
   }
   const groupsById = new Map(s.groups.map((g) => [g.id, g]));
   const sections = m.colorways.map((cw, i) => {
@@ -789,7 +820,8 @@ function tabMaterial(m, s) {
     <div class="quick">
       <button class="btn sm" data-act="add-material" data-id="${m.id}" data-kind="mato" data-cw="">+ Umumiy material</button>
       <button class="btn primary sm" data-act="add-material" data-id="${m.id}" data-kind="aks" data-cw="">+ Umumiy aksessuar</button>
-    </div>`;
+    </div>
+    ${extrasSection(m, s)}`;
 }
 
 function tabSex(m, s) {
@@ -953,7 +985,7 @@ function viewMonthly() {
       <div class="tr"><span>− Oylik rasxodlar</span><b>${money(r.overhead)}</b></div>
       <div class="tr total"><span>= Toza foyda</span><b class="${r.netProfit < 0 ? 'neg' : 'pos'}">${money(r.netProfit)}</b></div>
     </section>
-    <section class="card">${kv('Shu oy mato va aksessuarga sarflandi', money(r.purchases))}</section>
+    <section class="card grid2">${kv('Shu oy mato va aksessuarga', money(r.purchases))}${kv("Shu oy qo'shimcha harajat", money(r.extraSpent))}</section>
     <div class="sec-row"><h2 class="sec">Oylik rasxodlar · ${money(r.overhead)}</h2><button class="btn primary sm" data-act="new-overhead">+ Rasxod</button></div>
     ${items || empty('Ijara, ish haqi, transport, telefon kabi oylik to\'lovlarni shu yerga yozing.')}
     <div class="sec-row"><h2 class="sec">Doimiy rasxodlar (har oy)</h2><button class="btn sm" data-act="new-recurring">+ Doimiy</button></div>
@@ -1044,6 +1076,8 @@ const actions = {
   'edit-wsline': (d) => { const m = model(d.id); wsLineForm(m, findSub(m.wsLines, d.sub)); },
   'add-service': (d) => serviceForm(model(d.id)),
   'edit-service': (d) => { const m = model(d.id); serviceForm(m, findSub(m.services, d.sub)); },
+  'add-extra': (d) => extraForm(model(d.id)),
+  'edit-extra': (d) => { const m = model(d.id); extraForm(m, findSub(m.extras, d.sub)); },
   'add-receipt': (d) => receiptForm(model(d.id)),
   'edit-receipt': (d) => { const m = model(d.id); receiptForm(m, findSub(m.receipts, d.sub)); },
   markup: (d) => markupForm(model(d.id)),

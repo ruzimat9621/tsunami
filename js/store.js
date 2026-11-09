@@ -72,7 +72,7 @@ export function normalize(val) {
 // Eski (1-versiya) yozuvlarni yangi tuzilmaga o'tkazish
 function migrateModel(raw) {
   const m = {
-    materials: [], receipts: [], sales: [], colorways: [], wsLines: [], services: [],
+    materials: [], receipts: [], sales: [], colorways: [], wsLines: [], services: [], extras: [],
     markupType: '%', status: 'jarayonda',
     ...raw,
   };

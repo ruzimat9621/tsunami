@@ -128,7 +128,11 @@ export function modelSummary(m) {
   const svcPerItem = sum(services.filter((s) => s.mode !== 'jami'), (s) => num(s.price));
   const svcFixed = sum(services.filter((s) => s.mode === 'jami'), (s) => num(s.price));
 
-  const totalCost = materialsTotal + workshopTotal + servicesTotal;
+  // Qo'shimcha bir martalik harajatlar (arava, taksi, yuk tashish...)
+  const extras = m.extras || [];
+  const extrasTotal = sum(extras, (e) => num(e.amount));
+
+  const totalCost = materialsTotal + workshopTotal + servicesTotal + extrasTotal;
   const per = (v) => (qty > 0 ? v / qty : 0);
   const unitCost = per(totalCost);
   const unitCostNet = per(totalCost - leftValue);
@@ -138,7 +142,7 @@ export function modelSummary(m) {
   for (const g of groups) {
     g.ownTotal = sum(g.rows, (r) => r.calc.total);
     g.share = qty > 0 ? g.qty / qty : 0;
-    g.cost = g.ownTotal + g.qty * (wsItem + svcPerItem) + (sharedTotal + svcFixed) * g.share;
+    g.cost = g.ownTotal + g.qty * (wsItem + svcPerItem) + (sharedTotal + svcFixed + extrasTotal) * g.share;
     g.unitCost = g.qty > 0 ? g.cost / g.qty : 0;
     g.price = salePrice(g.unitCost, m.markupType, m.markupValue);
     g.unitProfit = g.price - g.unitCost;
@@ -162,7 +166,7 @@ export function modelSummary(m) {
     split, groups, sharedRows, sharedTotal, sharedPossible: shareLim.possible, untaggedReceipts,
     rows, fabrics, accessories, fabricTotal, accTotal, materialsTotal, leftValue,
     possibleOutput, limiting, unitCostFor,
-    wsLines, wsItem, workshopTotal, services, servicesTotal, totalCost,
+    wsLines, wsItem, workshopTotal, services, servicesTotal, extras, extrasTotal, totalCost,
     unitCost, unitCostNet,
     unitFabric: per(fabricTotal), unitAcc: per(accTotal), unitServices: per(servicesTotal),
     price, unitProfit, sold, revenue, stock, profitSold, expectedProfit,
@@ -174,7 +178,7 @@ const inMonth = (date, ym) => typeof date === 'string' && date.startsWith(ym);
 
 // Oylik hisobot: shu oydagi sotuvlar, sotilgan tovar tannarxi, oylik rasxodlar, toza foyda
 export function monthReport(state, ym) {
-  let revenue = 0, cogs = 0, soldCount = 0, purchases = 0;
+  let revenue = 0, cogs = 0, soldCount = 0, purchases = 0, extraSpent = 0;
   for (const m of state.models || []) {
     const s = modelSummary(m);
     for (const sale of m.sales || []) {
@@ -187,10 +191,13 @@ export function monthReport(state, ym) {
     for (const mat of m.materials || []) {
       if (inMonth(mat.date, ym)) purchases += num(mat.qty) * num(mat.price);
     }
+    for (const e of m.extras || []) {
+      if (inMonth(e.date, ym)) extraSpent += num(e.amount);
+    }
   }
   const overheadItems = (state.overhead || []).filter((o) => o.month === ym);
   const overhead = sum(overheadItems, (o) => num(o.amount));
   const grossProfit = revenue - cogs;
   const netProfit = grossProfit - overhead;
-  return { revenue, cogs, soldCount, grossProfit, overhead, overheadItems, netProfit, purchases };
+  return { revenue, cogs, soldCount, grossProfit, overhead, overheadItems, netProfit, purchases, extraSpent };
 }

@@ -10,7 +10,8 @@ Bitta kod: **web**da ishlaydi, **iPhone** va **Android**ga ilova sifatida o'rnat
 3. **Aksessuar va detallar** — tugma, zamok, rezinka, lenta va h.k.
 4. **Sarf kiyim qismlari bo'yicha** — masalan Tepa 1,7 m + Ishton 1 m (yoki To'liq 2,7 m). Ilova har bir materialdan **nechta chiqishini**, qancha ortishini va 1 donaga necha pul ketishini hisoblaydi. Eng kam chiqaradigan material — chiqadigan tovar soni.
 5. **Sex** — manzil, tikuvchi ismi, telefon; kelishuv: usluga (to'liq), bichuv, tikuv yoki boshqa — 1 donaga narx. To'langan pul va qarz.
-6. **Qo'shimcha xizmatlar** — dazmol, upakovka, dostavka, print, vishivka, petlya va istalgan boshqasi (1 donaga yoki umumiy summa).
+6. **Qo'shimcha harajatlar** — arava (bozordan chiqarish), taksi, yuk tashish va h.k. bir martalik summalar; tannarxga qo'shiladi.
+7. **Qo'shimcha xizmatlar** — dazmol, upakovka, dostavka, print, vishivka, petlya va istalgan boshqasi (1 donaga yoki umumiy summa).
 7. **Hisob** — chiqadigan tovar soni, **1 dona tannarxi**, **har bir rasvetka alohida** (nechta chiqadi, tannarx, foyda), hamma rasxodlar jadvali (1 donaga / jami).
 8. **Sotuv narxi** — o'zingiz narx yozasiz yoki tannarx ustiga summa/foiz qo'yasiz → 1 donadan va jami **foyda**.
 9. **Sexdan olingan tovar** va **sotuvlar** yoziladi — shundan keyin hisob haqiqiy son bo'yicha.

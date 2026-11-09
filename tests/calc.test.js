@@ -185,3 +185,20 @@ test('rasvetka bo\'yicha qabul qilingan son ishlatiladi; umumiy material yetmasa
   assert.equal(s.possibleOutput, 60); // 50+50=100, lekin zamok faqat 60 ga yetadi
   assert.equal(s.limiting.kind, 'aks');
 });
+
+test("qo'shimcha harajat (arava 20 000) tannarxga va rasvetkalarga taqsimlanadi", () => {
+  const m = {
+    colorways: [{ id: 'a' }, { id: 'b' }],
+    materials: [
+      { colorwayId: 'a', unit: 'm', qty: 30, price: 10000, parts: [{ per: 1 }] }, // 30 dona
+      { colorwayId: 'b', unit: 'm', qty: 10, price: 10000, parts: [{ per: 1 }] }, // 10 dona
+    ],
+    extras: [{ name: 'Arava', amount: 20000, date: '2026-11-02' }, { name: 'Taksi', amount: 40000, date: '2026-10-30' }],
+  };
+  const s = modelSummary(m);
+  assert.equal(s.extrasTotal, 60000);
+  assert.equal(s.totalCost, 400_000 + 60_000);
+  assert.equal(s.groups[0].cost, 300_000 + 60_000 * 0.75);
+  assert.equal(s.groups[1].cost, 100_000 + 60_000 * 0.25);
+  assert.equal(monthReport({ models: [m] }, '2026-11').extraSpent, 20000);
+});
