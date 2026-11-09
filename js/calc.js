@@ -16,27 +16,43 @@ export const soldQty = (m) => sum(m.sales, (s) => num(s.qty));
 // 1 ta kiyimga sarf = barcha qismlar yig'indisi (tepa 1,7 + ishton 1 = 2,7)
 export const perItem = (mat) => sum(mat.parts, (p) => num(p.per));
 
-// Sarf qaysi birlikda o'lchanadi: kg bo'lib, "1 kg = necha metr" kiritilgan bo'lsa — metrda
+// O'tkazish koeffitsienti: 1 kg = necha metr, 1 pachka = necha dona
+export function unitFactor(mat) {
+  if (mat.unit === 'kg') return num(mat.metersPerKg);
+  if (mat.unit === 'pachka') return num(mat.perPack);
+  return 0;
+}
+
+// Sarf qaysi birlikda o'lchanadi: kg → metr, pachka → dona (koeffitsient kiritilgan bo'lsa)
 export function consumptionUnit(mat) {
   if (mat.unit === 'kg') return num(mat.metersPerKg) > 0 ? 'm' : 'kg';
+  if (mat.unit === 'pachka') return num(mat.perPack) > 0 ? 'dona' : 'pachka';
   return mat.unit || 'm';
 }
+
+// Asosiy mato — qism (tepa, ishton) soni shundan hisoblanadi. Astar, dublerin — yordamchi.
+export const isMain = (mat) => mat.kind !== 'aks' && mat.role !== 'yordamchi';
+const norm = (t) => String(t || '').trim().toLowerCase();
 
 // Bitta material/aksessuar: jami narx, mavjud miqdor, nechta chiqadi, qancha ishlatildi, qancha qoldi
 export function materialRow(mat, qty) {
   const amount = num(mat.qty);
   const price = num(mat.price);
   const total = amount * price;
-  const conv = mat.unit === 'kg' && num(mat.metersPerKg) > 0;
-  const available = conv ? amount * num(mat.metersPerKg) : amount;
+  const factor = unitFactor(mat);
+  const available = factor > 0 ? amount * factor : amount;
   const per = perItem(mat);
   const unitPrice = available > 0 ? total / available : 0; // sarf birligi narxi
   const perCost = per * unitPrice; // 1 ta kiyimga shu materialdan ketadigan pul
   const possible = per > 0 ? Math.floor(available / per + 1e-9) : null;
-  const used = per > 0 && qty > 0 ? qty * per : null;
+  // Sex shu materialdan nechta chiqarib bergani yozilgan bo'lsa — qoldiq haqiqiy son bo'yicha
+  const produced = num(mat.producedQty);
+  const actual = produced > 0;
+  const usedFor = actual ? produced : qty;
+  const used = per > 0 && usedFor > 0 ? usedFor * per : null;
   const left = used !== null ? available - used : null;
   const leftValue = left !== null && left > 0 ? left * unitPrice : 0;
-  return { amount, price, total, available, unit: consumptionUnit(mat), per, perCost, possible, used, left, leftValue };
+  return { amount, price, total, available, unit: consumptionUnit(mat), unitPrice, per, perCost, possible, produced, actual, used, left, leftValue };
 }
 
 // Sotuv narxi: foiz, tannarx ustiga summa yoki to'g'ridan-to'g'ri narx
@@ -49,6 +65,34 @@ export function salePrice(unitCost, markupType, markupValue) {
 
 export function serviceTotal(s, qty) {
   return s.mode === 'jami' ? num(s.price) : num(s.price) * qty;
+}
+
+// Tayyor qismlar: har bir asosiy matodan sex chiqargan son, qism (tepa, ishton) bo'yicha yig'indi.
+// 1 dona qism narxi = asosiy mato sarfi + shu qismga ketgan yordamchi mato (astar) sarfi.
+export function partsReport(rows) {
+  const aux = rows.filter((r) => r.kind !== 'aks' && !isMain(r));
+  const map = new Map();
+  for (const r of rows) {
+    if (!isMain(r) || !(num(r.producedQty) > 0)) continue;
+    for (const p of r.parts || []) {
+      if (!(num(p.per) > 0)) continue;
+      const key = norm(p.name) || "to'liq";
+      let unitCost = num(p.per) * r.calc.unitPrice;
+      for (const a of aux) {
+        if (a.colorwayId && a.colorwayId !== r.colorwayId) continue;
+        for (const ap of a.parts || []) if (norm(ap.name) === key) unitCost += num(ap.per) * a.calc.unitPrice;
+      }
+      if (!map.has(key)) map.set(key, { name: p.name || "To'liq", total: 0, cost: 0, lines: [] });
+      const e = map.get(key);
+      const count = num(r.producedQty);
+      e.total += count;
+      e.cost += count * unitCost;
+      e.lines.push({ mat: r, colorwayId: r.colorwayId || '', count, unitCost });
+    }
+  }
+  const parts = [...map.values()].map((e) => ({ ...e, unitCost: e.total ? e.cost / e.total : 0 }));
+  const komplekt = parts.length ? Math.min(...parts.map((e) => e.total)) : null;
+  return { parts, komplekt };
 }
 
 const minPossible = (rows) => {
@@ -75,16 +119,34 @@ export function modelSummary(m) {
   const shared = split ? all.filter((x) => !inGroup.has(x)) : [];
   if (!split) groups = [{ id: '', cw: null, index: -1, name: '', mats: all }];
 
-  // Har bir guruh uchun son: sexdan olingan → reja → materialdan avtomatik chiqadigan
+  // Tayyor qismlar va komplekt (sex har materialdan nechta chiqargani bo'yicha)
+  for (const x of all) x.calc = materialRow(x, 0);
+  const { parts, komplekt: komplektAuto } = partsReport(all);
+
+  // Har bir guruh uchun son: sexdan olingan (qo'lda) → qismlardan avtomatik komplekt → reja → materialdan chiqadigan
   for (const g of groups) {
     const pre = g.mats.map((x) => ({ ...x, calc: materialRow(x, 0) }));
     Object.assign(g, minPossible(pre));
     g.received = split ? sum(receipts.filter((r) => r.colorwayId === g.id), (r) => num(r.qty)) : received;
     g.planned = split ? num(g.cw.plannedQty) : planned;
+    g.produced = split ? partsReport(g.mats).komplekt : komplektAuto;
     if (g.received > 0) { g.qty = g.received; g.basis = 'received'; }
+    else if (g.produced) { g.qty = g.produced; g.basis = 'produced'; }
     else if (g.planned > 0) { g.qty = g.planned; g.basis = 'planned'; }
     else if (g.possible) { g.qty = g.possible; g.basis = 'auto'; }
     else { g.qty = 0; g.basis = 'none'; }
+  }
+  const scaleGroups = (target, basis) => {
+    const base = sum(groups, (g) => g.qty);
+    for (const g of groups) {
+      g.qty = base > 0 ? (target * g.qty) / base : (g === groups[0] ? target : 0);
+      if (basis) g.basis = basis;
+    }
+  };
+  if (split) {
+    const tagged = sum(groups, (g) => g.received);
+    if (received > 0 && tagged === 0) scaleGroups(received, 'received'); // jami son qo'lda, rasvetkasiz
+    else if (!received && komplektAuto && sum(groups, (g) => g.qty) > komplektAuto && groups.every((g) => g.basis === 'produced')) scaleGroups(komplektAuto);
   }
   const qty = sum(groups, (g) => g.qty);
   const basisSet = new Set(groups.filter((g) => g.qty > 0).map((g) => g.basis));
@@ -159,11 +221,13 @@ export function modelSummary(m) {
   const unitProfit = qty > 0 ? expectedProfit / qty : price - unitCost;
   const wsPaid = num(m.wsPaid);
   const wsDebt = workshopTotal - wsPaid;
-  const untaggedReceipts = split ? received - sum(groups, (g) => g.received) : 0;
+  const tagged = split ? sum(groups, (g) => g.received) : 0;
+  const untaggedReceipts = split && tagged > 0 ? received - tagged : 0;
 
   return {
     received, planned, qty, basis, isActual: basis === 'received',
     split, groups, sharedRows, sharedTotal, sharedPossible: shareLim.possible, untaggedReceipts,
+    parts, komplektAuto,
     rows, fabrics, accessories, fabricTotal, accTotal, materialsTotal, leftValue,
     possibleOutput, limiting, unitCostFor,
     wsLines, wsItem, workshopTotal, services, servicesTotal, extras, extrasTotal, totalCost,

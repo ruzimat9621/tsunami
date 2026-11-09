@@ -202,3 +202,66 @@ test("qo'shimcha harajat (arava 20 000) tannarxga va rasvetkalarga taqsimlanadi"
   assert.equal(s.groups[1].cost, 100_000 + 60_000 * 0.25);
   assert.equal(monthReport({ models: [m] }, '2026-11').extraSpent, 20000);
 });
+
+test('pachka: 1 pachkada 144 dona — sarf donada', () => {
+  const r = materialRow({ unit: 'pachka', qty: 2, price: 36000, perPack: 144, parts: [{ per: 6 }] }, 0);
+  assert.equal(r.unit, 'dona');
+  assert.equal(r.available, 288);
+  assert.equal(r.possible, 48);
+  assert.equal(r.perCost, 6 * 250);
+});
+
+test('sex chiqargan son bo\'yicha qoldiq material', () => {
+  const r = materialRow({ unit: 'm', qty: 30, price: 10000, producedQty: 15, parts: [{ name: 'Tepa', per: 1.7 }] }, 99);
+  assert.equal(r.actual, true);
+  assert.equal(r.used, 15 * 1.7);
+  assert.ok(Math.abs(r.left - 4.5) < 1e-9);
+});
+
+test('qismlar: tepa choko 15 + bardo 17 + siniy 26 = 58, ishton 58 → 58 komplekt; sex 58 × narx', () => {
+  const m = {
+    materials: [
+      { kind: 'mato', name: 'Choko', unit: 'm', qty: 30, price: 20000, producedQty: 15, parts: [{ name: 'Tepa', per: 1.7 }] },
+      { kind: 'mato', name: 'Bardo', unit: 'kg', qty: 10, price: 90000, metersPerKg: 3, producedQty: 17, parts: [{ name: 'Tepa', per: 1.7 }] },
+      { kind: 'mato', name: 'Tyomniy siniy', unit: 'm', qty: 45, price: 22000, producedQty: 26, parts: [{ name: 'tepa ', per: 1.7 }] },
+      { kind: 'mato', name: 'Qora', unit: 'm', qty: 60, price: 15000, producedQty: 58, parts: [{ name: 'Ishton', per: 1 }] },
+      { kind: 'mato', role: 'yordamchi', name: 'Astar', unit: 'm', qty: 50, price: 10000, producedQty: 58, parts: [{ name: 'Tepa', per: 0.8 }] },
+      { kind: 'aks', name: 'Tugma', unit: 'pachka', qty: 3, price: 36000, perPack: 144, parts: [{ name: 'Tepa', per: 6 }] },
+    ],
+    wsLines: [{ name: 'Usluga', price: 30000 }],
+  };
+  const s = modelSummary(m);
+  const tepa = s.parts.find((p) => p.name === 'Tepa');
+  const ishton = s.parts.find((p) => p.name === 'Ishton');
+  assert.equal(tepa.total, 58); // astar yordamchi — ikkinchi marta sanalmaydi
+  assert.equal(tepa.lines.length, 3);
+  assert.equal(ishton.total, 58);
+  assert.equal(s.komplektAuto, 58);
+  assert.equal(s.qty, 58);
+  assert.equal(s.basis, 'produced');
+  assert.equal(s.workshopTotal, 58 * 30000);
+  // Tepa (choko) 1 dona: 1,7 m choko + 0,8 m astar
+  assert.equal(tepa.lines[0].unitCost, 1.7 * 20000 + 0.8 * 10000);
+  // qo'lda kiritilgan son (sexdan olingan) ustun turadi
+  m.receipts = [{ qty: 55 }];
+  assert.equal(modelSummary(m).qty, 55);
+  assert.equal(modelSummary(m).workshopTotal, 55 * 30000);
+});
+
+test('rasvetkalar bo\'yicha qismlar; jami son rasvetkasiz qo\'lda kiritilsa taqsimlanadi', () => {
+  const m = {
+    colorways: [{ id: 'c' }, { id: 'b' }],
+    materials: [
+      { colorwayId: 'c', name: 'Choko', unit: 'm', qty: 30, price: 1, producedQty: 15, parts: [{ name: 'Tepa', per: 1.7 }] },
+      { colorwayId: 'b', name: 'Bardo', unit: 'm', qty: 30, price: 1, producedQty: 17, parts: [{ name: 'Tepa', per: 1.7 }] },
+      { name: 'Qora', unit: 'm', qty: 40, price: 1, producedQty: 32, parts: [{ name: 'Ishton', per: 1 }] },
+    ],
+  };
+  let s = modelSummary(m);
+  assert.deepEqual(s.groups.map((g) => g.qty), [15, 17]);
+  assert.equal(s.komplektAuto, 32);
+  m.receipts = [{ qty: 64 }];
+  s = modelSummary(m);
+  assert.equal(s.qty, 64);
+  assert.deepEqual(s.groups.map((g) => g.qty), [30, 34]);
+});

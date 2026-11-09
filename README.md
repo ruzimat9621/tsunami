@@ -16,7 +16,9 @@ Bitta kod: **web**da ishlaydi, **iPhone** va **Android**ga ilova sifatida o'rnat
 8. **Sotuv narxi** — o'zingiz narx yozasiz yoki tannarx ustiga summa/foiz qo'yasiz → 1 donadan va jami **foyda**.
 9. **Sexdan olingan tovar** va **sotuvlar** yoziladi — shundan keyin hisob haqiqiy son bo'yicha.
 
-Hisob uchun son: sexdan olingan son → bo'lmasa reja → bo'lmasa materialdan avtomatik chiqadigan son.
+**Sex va tayyor qismlar:** har bir materialda **qaysi sexga berilgani** va **sex shundan nechta chiqarib bergani** yoziladi — shu son bo'yicha qoldiq material hisoblanadi. Qismlar alohida yig'iladi: masalan Tepa = choko 15 + bardo 17 + siniy 26 = 58, Ishton = 58 → **58 komplekt** (avtomatik, eng kam qism bo'yicha). Astar kabi **yordamchi** matolar qism soniga qo'shilmaydi. Aksessuar **pachka**da olinsa, "1 pachkada necha dona" yoziladi.
+
+Hisob uchun son: sexdan olingan komplekt (qo'lda) → qismlardan avtomatik komplekt → reja → materialdan chiqadigan son. Sexga to'lov = shu son × kelishilgan narx.
 
 Boshqa bo'limlar: **Do'konlar** (manzil, telefon, nima olingani), **Sexlar** (fasonlar, ish haqi, qarz), **Oylik** (ijara, ish haqi va boshqa oylik rasxodlar, **toza foyda = sotuvdan foyda − oylik rasxodlar**).
 

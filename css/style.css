@@ -293,3 +293,20 @@ textarea { resize: vertical; }
 .cw-table .tr > * { font-size: 13px; }
 .warn-chip { background: var(--warn-bg); color: var(--warn); }
 .usage b { white-space: nowrap; }
+
+/* Tayyor qismlar */
+.parts-card { padding-top: 6px; }
+.part-block { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.part-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.part-head b:first-child { font-size: 16px; }
+.part-head span { font-size: 13px; color: var(--muted); }
+.part-head span b { color: var(--text); font-size: 15px; }
+.part-line { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; font-size: 13px; padding: 3px 0 3px 10px; color: var(--muted); }
+.part-line span:nth-child(2) { color: var(--text); font-weight: 600; }
+.part-line span:last-child { text-align: right; white-space: nowrap; }
+.part-total { padding: 8px 0; }
+.part-total > div { display: flex; justify-content: space-between; padding: 3px 0; font-size: 14px; }
+.part-total > div.big { font-size: 16px; font-weight: 700; color: var(--primary); }
+.text { color: var(--text); }
+
+[hidden] { display: none !important; }
