@@ -6,12 +6,13 @@ const KEY = 'state';
 
 export function emptyState() {
   return {
-    version: 2,
+    version: 3,
     shops: [],
     workshops: [],
     models: [],
     overhead: [],
     recurring: [],
+    photos: {}, // rasmlar alohida: { photoId: dataURL } — sinxronlashda har biri bir marta yuboriladi
   };
 }
 
@@ -43,15 +44,28 @@ export async function loadState() {
   }
 }
 
+export async function kvGet(key) {
+  const d = await db();
+  return new Promise((resolve, reject) => {
+    const r = d.transaction(STORE, 'readonly').objectStore(STORE).get(key);
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+  });
+}
+
+export async function kvPut(key, val) {
+  const d = await db();
+  return new Promise((resolve, reject) => {
+    const tx = d.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).put(val, key);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 export async function saveState(state) {
   try {
-    const d = await db();
-    await new Promise((resolve, reject) => {
-      const tx = d.transaction(STORE, 'readwrite');
-      tx.objectStore(STORE).put(state, KEY);
-      tx.oncomplete = resolve;
-      tx.onerror = () => reject(tx.error);
-    });
+    await kvPut(KEY, state);
   } catch (e) {
     localStorage.setItem(DB_NAME, JSON.stringify(state));
   }
@@ -65,7 +79,18 @@ export function normalize(val) {
     if (!Array.isArray(s[k])) s[k] = [];
   }
   s.models = s.models.map(migrateModel);
-  s.version = 2;
+  if (!s.photos || typeof s.photos !== 'object' || Array.isArray(s.photos)) s.photos = {};
+  // Rasvetka rasmlarini fason ichidan alohida joyga ko'chirish
+  for (const m of s.models) {
+    m.colorways = m.colorways.map((c) => {
+      if (!c.photo) return c;
+      const { photo, ...rest } = c;
+      const photoId = rest.photoId || uid();
+      s.photos[photoId] = photo;
+      return { ...rest, photoId };
+    });
+  }
+  s.version = 3;
   return s;
 }
 

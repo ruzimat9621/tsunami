@@ -122,9 +122,11 @@ test('eski versiya ma\'lumotlari yangi tuzilmaga o\'tadi', () => {
     }],
   });
   const m = s.models[0];
-  assert.equal(s.version, 2);
+  assert.equal(s.version, 3);
   assert.equal(m.colorways.length, 1);
   assert.equal(m.photo, undefined);
+  assert.equal(m.colorways[0].photo, undefined);
+  assert.equal(s.photos[m.colorways[0].photoId], 'data:x'); // rasm alohida joyga ko'chdi
   assert.deepEqual(m.materials[0].parts, [{ name: "To'liq", per: 1.8 }]);
   assert.equal(m.materials[0].kind, 'mato');
   assert.equal(m.materials[1].kind, 'aks');

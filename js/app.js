@@ -1,4 +1,5 @@
 import { loadState, saveState, uid, normalize } from './store.js';
+import * as sync from './sync.js';
 import { num, sum, modelSummary, monthReport, materialRow, receivedQty, soldQty, salePrice, consumptionUnit, isMain } from './calc.js';
 
 // ---------- Yordamchilar ----------
@@ -39,11 +40,26 @@ const ui = { tab: {}, open: {}, month: thisMonth(), search: '' };
 async function commit() {
   await saveState(state);
   render();
+  sync.schedulePush();
+}
+
+// Rasvetka rasmlari alohida saqlanadi: state.photos[photoId]
+const photoSrc = (cw) => (cw && (state.photos[cw.photoId] || cw.photo)) || '';
+function setPhoto(cw, dataUrl) {
+  if (!dataUrl || dataUrl === photoSrc(cw)) return;
+  const old = cw.photoId;
+  cw.photoId = uid();
+  state.photos[cw.photoId] = dataUrl;
+  delete cw.photo;
+  if (old) dropPhotoIfUnused(old);
+}
+function dropPhotoIfUnused(id) {
+  if (!state.models.some((m) => m.colorways.some((c) => c.photoId === id))) delete state.photos[id];
 }
 
 const byId = (list, id) => state[list].find((x) => x.id === id);
 const model = (id) => byId('models', id);
-const cover = (m) => m.colorways?.[0]?.photo || '';
+const cover = (m) => photoSrc(m.colorways?.[0]);
 
 function toast(msg) {
   const t = $('#toast');
@@ -117,6 +133,7 @@ function closeForm() {
   $('#sheet').innerHTML = '';
   document.body.classList.remove('noscroll');
   currentForm = null;
+  setTimeout(() => sync.flush(), 0); // forma ochiq turganda kelgan o'zgarishlar
 }
 
 function readForm() {
@@ -186,7 +203,7 @@ document.addEventListener('change', async (e) => {
     const files = [...inp.files];
     toast(`${files.length} ta rasm yuklanmoqda…`);
     for (const f of files) {
-      try { m.colorways.push({ id: uid(), photo: await resizeImage(f, 900), color: '' }); } catch { /* rasm o'qilmadi */ }
+      try { const cw = { id: uid(), color: '' }; setPhoto(cw, await resizeImage(f, 900)); m.colorways.push(cw); } catch { /* rasm o'qilmadi */ }
     }
     await commit();
     toast(`${files.length} ta rasvetka qo'shildi. Rangini yozish uchun rasmni bosing.`);
@@ -290,6 +307,7 @@ function modelForm(m) {
     onDelete: m ? () => {
       if (!confirm(`"${m.name}" fasonini va unga tegishli hamma yozuvlarni o'chirasizmi?`)) return false;
       state.models = state.models.filter((x) => x !== m);
+      for (const c of m.colorways) if (c.photoId) dropPhotoIfUnused(c.photoId);
       location.hash = '#/models';
     } : null,
   });
@@ -299,19 +317,20 @@ function colorwayForm(m, cw) {
   const idx = m.colorways.indexOf(cw);
   openForm({
     title: `Rasvetka ${idx + 1} / ${m.colorways.length}`,
-    values: cw,
+    values: { ...cw, photo: photoSrc(cw) },
     fields: [
       { name: 'photo', label: 'Rasm', type: 'photo', big: true },
       { name: 'color', label: 'Rangi / nomi', list: knownColors(), placeholder: 'Masalan: Bardo, Choko, Qora' },
       { name: 'plannedQty', label: 'Bu rasvetkadan reja (ixtiyoriy)', type: 'number', suffix: 'dona', hint: "Bo'sh qoldirsangiz — materialidan nechta chiqishi olinadi" },
       { name: 'note', label: 'Izoh', type: 'textarea' },
     ],
-    onSubmit: (v) => Object.assign(cw, v),
+    onSubmit: (v) => { const { photo, ...rest } = v; Object.assign(cw, rest); setPhoto(cw, photo); },
     onDelete: () => {
       const own = m.materials.filter((x) => x.colorwayId === cw.id);
       if (!confirm(own.length ? `Bu rasvetka va uning ${own.length} ta materiali o'chadi. Davom etasizmi?` : "Bu rasvetkani o'chirasizmi?")) return false;
       m.colorways = m.colorways.filter((x) => x !== cw);
       m.materials = m.materials.filter((x) => x.colorwayId !== cw.id);
+      if (cw.photoId) dropPhotoIfUnused(cw.photoId);
     },
   });
 }
@@ -598,10 +617,30 @@ const kv = (label, value, cls = '') => `<div class="kv ${cls}"><span>${label}</s
 const empty = (text, btn) => `<div class="empty"><p>${text}</p>${btn || ''}</div>`;
 const thumb = (m, cls = '') => `<div class="thumb ${cls}">${cover(m) ? `<img src="${h(cover(m))}" alt="">` : '👗'}${m.colorways.length > 1 ? `<span class="badge">${m.colorways.length}</span>` : ''}</div>`;
 
+const SYNC_TEXT = {
+  ok: 'Sinxronlangan', syncing: 'Sinxronlanmoqda…', pending: 'Yuborilmoqda…', offline: "Internet yo'q — keyin yuboriladi",
+  error: 'Sinxronlashda xato', login: 'Serverga kirilmagan', off: '',
+};
+function syncBadge() {
+  const st = sync.status;
+  if (!st.configured) return '';
+  return `<a href="#/settings" class="sync-badge sb-${st.state}" title="${h(SYNC_TEXT[st.state] || '')}">☁︎</a>`;
+}
+let syncKey = '';
+function onSyncStatus(st) {
+  const key = `${st.configured}|${st.user?.id || ''}`;
+  const typing = document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA';
+  // Ulanish/kirish holati o'zgarsa — sahifani qayta chizamiz (belgi va Sozlamalar uchun)
+  if (key !== syncKey && !currentForm && !typing) { syncKey = key; render(); return; }
+  for (const el of document.querySelectorAll('.sync-badge')) el.outerHTML = syncBadge();
+  if ((location.hash || '').startsWith('#/settings') && !currentForm && !typing) render();
+}
+
 function header(title, opts = {}) {
   return `<header class="top">
     ${opts.back ? `<a class="icon-btn" href="${opts.back}" aria-label="Orqaga">‹</a>` : '<span class="logo">✂️</span>'}
     <h1>${h(title)}</h1>
+    ${syncBadge()}
     ${opts.right || '<a class="icon-btn" href="#/settings" aria-label="Sozlamalar">⚙︎</a>'}
   </header>`;
 }
@@ -684,7 +723,7 @@ function viewModel(id) {
   const body = { hisob: tabHisob, material: tabMaterial, sex: tabSex, sotuv: tabSotuv }[tab](m, s);
   const gq = new Map(s.split ? s.groups.map((g) => [g.id, g.qty]) : []);
   const cws = m.colorways.map((c) => `<button class="cw" data-act="edit-colorway" data-id="${m.id}" data-sub="${c.id}">
-      <img src="${h(c.photo)}" alt="" loading="lazy"><span>${h(c.color || 'rang?')}</span>${gq.has(c.id) ? `<small>${fmt(gq.get(c.id), 0)} dona</small>` : ''}</button>`).join('');
+      <img src="${h(photoSrc(c))}" alt="" loading="lazy"><span>${h(c.color || 'rang?')}</span>${gq.has(c.id) ? `<small>${fmt(gq.get(c.id), 0)} dona</small>` : ''}</button>`).join('');
   return header(m.name, { back: '#/models', right: `<button class="icon-btn" data-act="edit-model" data-id="${m.id}" aria-label="Tahrirlash">✎</button>` }) + `<main>
     <div class="model-meta">${statusChip(m.status)}${m.code ? `<span class="muted">Kod: ${h(m.code)}</span>` : ''}${m.sizes ? `<span class="muted">O'lcham: ${h(m.sizes)}</span>` : ''}${m.date ? `<span class="muted">${dateUz(m.date)}</span>` : ''}</div>
     <div class="sec-row"><h2 class="sec">Rasvetkalar · ${m.colorways.length} ta</h2></div>
@@ -776,7 +815,7 @@ function partsSection(m, s) {
 function colorwayTable(m, s) {
   if (!s.split) return '';
   const rows = s.groups.map((g) => `<div class="tr">
-      <span class="cw-name"><img src="${h(g.cw.photo)}" alt="">${g.index + 1}. ${h(g.name)}</span>
+      <span class="cw-name"><img src="${h(photoSrc(g.cw))}" alt="">${g.index + 1}. ${h(g.name)}</span>
       <span>${fmt(g.qty, 0)}</span>
       <span>${money(g.unitCost)}</span>
       <b class="${g.unitProfit < 0 ? 'neg' : 'pos'}">${money(g.unitProfit)}</b>
@@ -831,7 +870,7 @@ function tabMaterial(m, s) {
     const open = ui.open[key] ?? (i === 0 || !rows.length);
     return `<details class="cw-group" data-key="${key}" ${open ? 'open' : ''}>
       <summary>
-        <img src="${h(cw.photo)}" alt="">
+        <img src="${h(photoSrc(cw))}" alt="">
         <div class="grow"><b>${i + 1}. ${h(cw.color || 'Rasvetka')}</b>
           <div class="muted small">${g ? `Chiqadi: <b>${fmt(g.possible ?? 0, 0)} dona</b> · Tannarx: <b>${money(g.unitCost)}</b>` : rows.length ? '' : 'Material kiritilmagan'}</div>
         </div><span class="chev">›</span>
@@ -1040,8 +1079,49 @@ function viewMonthly() {
   </main>`;
 }
 
+function syncCard() {
+  const st = sync.status;
+  const cfg = sync.getConfig();
+  if (!st.configured) {
+    return `<section class="card sync-card">
+      <h3>☁︎ Server — bir nechta telefonda birga ishlash</h3>
+      <p class="muted">Serverga ulansangiz, siz va oilangiz bitta login bilan kirib, hamma o'zgarishni darhol ko'rasiz. Internetsiz ham ishlaydi — internet kelganda o'zi sinxronlaydi.</p>
+      <p class="muted small">Ilovani serverdagi manzildan ochsangiz, bu yerga hech narsa yozish shart emas. Aks holda server manzilini kiriting.</p>
+      <div class="field"><label>Server manzili</label><input id="sb-url" placeholder="https://fason.sizning-domen.uz" autocomplete="off" inputmode="url" value="${h(cfg?.url || '')}"></div>
+      <div class="quick"><button class="btn primary" data-act="sync-config">Ulash</button></div>
+      ${st.error ? `<div class="warn small">${h(st.error)}</div>` : ''}
+    </section>`;
+  }
+  if (!st.user) {
+    return `<section class="card sync-card">
+      <h3>☁︎ Serverga kirish</h3>
+      <p class="muted small">Ikkala telefonda ham <b>bir xil</b> email va parol bilan kiring. Server yangi bo'lsa, birinchi marta — "Ro'yxatdan o'tish" (faqat bitta hisob ochiladi).</p>
+      <div class="field"><label>Email</label><input id="sb-email" type="email" autocomplete="username" placeholder="oila@gmail.com" value="${h(ui.syncEmail || '')}"></div>
+      <div class="field"><label>Parol (kamida 6 belgi)</label><input id="sb-pass" type="password" autocomplete="current-password"></div>
+      <div class="quick"><button class="btn primary" data-act="sync-signin">Kirish</button><button class="btn" data-act="sync-signup">Ro'yxatdan o'tish</button></div>
+      ${st.error ? `<div class="warn small">${h(st.error)}</div>` : ''}
+      <button class="btn ghost sm" data-act="sync-forget">Boshqa serverga ulash</button>
+    </section>`;
+  }
+  const last = st.last ? st.last.toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' }) : '—';
+  return `<section class="card sync-card">
+    <h3>☁︎ Serverga ulangan</h3>
+    ${kv('Hisob', h(st.user.email))}
+    ${kv('Holat', `<span class="sb-text sb-${st.state}">${h(SYNC_TEXT[st.state] || st.state)}</span>${st.pending ? ` · ${st.pending} ta kutmoqda` : ''}`)}
+    ${kv('Oxirgi sinxron', last)}
+    ${st.error && st.state === 'error' ? `<div class="warn small">${h(st.error)}</div>` : ''}
+    <div class="quick">
+      <button class="btn primary" data-act="sync-share">📲 Boshqa telefonga ulash</button>
+      <button class="btn" data-act="sync-now">↻ Hozir sinxronlash</button>
+    </div>
+    <p class="muted small">"Boshqa telefonga ulash" havolasini ayolingizga yuboring. U havolani telefonida ochadi va shu email/parol bilan kiradi.</p>
+    <button class="btn ghost sm" data-act="sync-logout">Chiqish (ma'lumot shu telefonda qoladi)</button>
+  </section>`;
+}
+
 function viewSettings() {
   return header('Sozlamalar', { back: '#/', right: '<span></span>' }) + `<main>
+    ${syncCard()}
     <section class="card">
       <h3>Zaxira nusxa (backup)</h3>
       <p class="muted">Ma'lumotlar shu telefon/brauzer ichida saqlanadi. Telefon almashtirsangiz yoki boshqa qurilmaga o'tkazmoqchi bo'lsangiz — faylga saqlab oling va yangi qurilmada yuklang. Haftada bir marta saqlab qo'yish tavsiya qilinadi.</p>
@@ -1071,6 +1151,7 @@ const NAV = [['#/', '🏠', 'Asosiy'], ['#/models', '👗', 'Fasonlar'], ['#/sho
 function render() {
   const hash = location.hash || '#/';
   const [, route, id] = hash.split('/');
+  if (route === 'connect') { connectFromLink(id); return; }
   let html;
   switch (route) {
     case 'models': html = viewModels(); break;
@@ -1155,8 +1236,32 @@ const actions = {
   month: (d) => { ui.month = shiftMonth(ui.month, +d.d); render(); },
   export: exportBackup,
   install: async () => { if (!deferredInstall) return; deferredInstall.prompt(); deferredInstall = null; },
+  'sync-config': async () => {
+    try { await sync.configure($('#sb-url').value); toast('Server topildi. Endi kiring.'); }
+    catch (e) { toast(e.message); }
+    render();
+  },
+  'sync-signin': async () => {
+    ui.syncEmail = $('#sb-email').value;
+    try { await sync.signIn($('#sb-email').value, $('#sb-pass').value); toast('Kirildi ✓ Sinxronlanmoqda…'); }
+    catch (e) { sync.status.error = e.message; render(); }
+  },
+  'sync-signup': async () => {
+    ui.syncEmail = $('#sb-email').value;
+    try { await sync.signUp($('#sb-email').value, $('#sb-pass').value); toast("Hisob ochildi ✓ Sinxronlanmoqda…"); }
+    catch (e) { sync.status.error = e.message; render(); }
+  },
+  'sync-now': async () => { await sync.syncNow(); toast(sync.status.state === 'ok' ? 'Sinxronlandi ✓' : SYNC_TEXT[sync.status.state]); },
+  'sync-logout': async () => { if (!confirm('Serverdan chiqasizmi? Ma\'lumot shu telefonda qoladi.')) return; await sync.logout(); render(); },
+  'sync-forget': async () => { await sync.forgetConfig(); render(); },
+  'sync-share': async () => {
+    const link = sync.shareLink();
+    const text = `Fason hisob ilovasi: ${link}\nOchib, Sozlamalar → shu email va parol bilan kiring.`;
+    try { if (navigator.share) { await navigator.share({ title: 'Fason hisob', text, url: link }); return; } } catch (e) { if (e.name === 'AbortError') return; }
+    try { await navigator.clipboard.writeText(link); toast('Havola nusxalandi — ayolingizga yuboring'); } catch { prompt('Havolani nusxalang:', link); }
+  },
   wipe: async () => {
-    if (!confirm("Hamma ma'lumot o'chadi! Avval zaxira nusxa olganingizga ishonchingiz komilmi?")) return;
+    if (!confirm(sync.status.user ? "Hamma ma'lumot shu telefonda VA serverda (boshqa telefonlarda ham) o'chadi! Davom etasizmi?" : "Hamma ma'lumot o'chadi! Avval zaxira nusxa olganingizga ishonchingiz komilmi?")) return;
     if (prompt('Tasdiqlash uchun "OCHIR" deb yozing') !== 'OCHIR') return;
     state = normalize(null);
     await commit();
@@ -1195,7 +1300,7 @@ async function importBackup(file) {
   try {
     const data = JSON.parse(await file.text());
     if (!data || !Array.isArray(data.models)) throw new Error('format');
-    if (!confirm(`Fayldagi ma'lumot (${data.models.length} fason) hozirgisining o'rniga yoziladi. Davom etasizmi?`)) return;
+    if (!confirm(`Fayldagi ma'lumot (${data.models.length} fason) hozirgisining o'rniga yoziladi${sync.status.user ? ' (serverda ham)' : ''}. Davom etasizmi?`)) return;
     state = normalize(data);
     await commit();
     toast('Yuklandi ✓');
@@ -1212,8 +1317,27 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('./sw.js').catch(() => {});
 }
 
+async function connectFromLink(code) {
+  try {
+    const cfg = sync.parseShare(code);
+    history.replaceState(null, '', '#/settings');
+    await sync.configure(cfg.url);
+    toast('Server ulandi — email va parol bilan kiring');
+  } catch {
+    history.replaceState(null, '', '#/settings');
+    toast("Havola noto'g'ri");
+  }
+  render();
+}
+
 (async () => {
   state = await loadState();
   navigator.storage?.persist?.().catch(() => {});
   render();
+  sync.init({
+    getState: () => state,
+    isBusy: () => !!currentForm,
+    onRemoteChange: async () => { state = normalize(state); await saveState(state); render(); },
+    onStatus: onSyncStatus,
+  });
 })();

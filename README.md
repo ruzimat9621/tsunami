@@ -22,6 +22,34 @@ Hisob uchun son: sexdan olingan komplekt (qo'lda) → qismlardan avtomatik kompl
 
 Boshqa bo'limlar: **Do'konlar** (manzil, telefon, nima olingani), **Sexlar** (fasonlar, ish haqi, qarz), **Oylik** (ijara, ish haqi va boshqa oylik rasxodlar, **toza foyda = sotuvdan foyda − oylik rasxodlar**).
 
+## Server (OVHcloud) — bir nechta telefonda birga ishlash
+
+Ilova va ma'lumotlar sizning serveringizda turadi. Siz va oilangiz **bitta email/parol** bilan kirasiz — bir telefonda yozilgan narsa ikkinchisida 1 soniyada ko'rinadi. Internet bo'lmasa ham ishlaydi, internet kelganda o'zi yuboradi.
+
+### O'rnatish (bir marta, ~5 daqiqa)
+1. OVH serverga SSH orqali kiring (Ubuntu yoki Debian).
+2. Quyidagi buyruqni ishga tushiring:
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/ruzimat9621/tsunami/main/deploy/install.sh | sudo bash
+   ```
+   O'z domeningiz bo'lsa (masalan `fason.example.uz`, A-yozuvi server IP siga qaratilgan):
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/ruzimat9621/tsunami/main/deploy/install.sh | sudo bash -s fason.example.uz
+   ```
+   Domen bo'lmasa — avtomatik `51-75-1-2.sslip.io` ko'rinishidagi manzil beriladi (bepul, HTTPS bilan).
+3. Oxirida chiqqan **https://…** manzilni telefonda oching → ⚙︎ Sozlamalar → email va parol → **Ro'yxatdan o'tish** (faqat birinchi marta, faqat bitta hisob ochiladi).
+4. Ayolingiz o'sha manzilni ochadi → ⚙︎ Sozlamalar → **o'sha** email va parol → **Kirish**. Keyin "Bosh ekranga qo'shish".
+
+Avval telefonda kiritgan ma'lumotlaringiz birinchi kirishda serverga yuklanadi.
+
+### Yangilash
+Har safar yangi versiya chiqqanda serverda: `sudo bash /opt/fason-hisob/deploy/install.sh`
+
+### Zaxira
+Ma'lumotlar bazasi: `/opt/fason-hisob/data/fason.db`. Server har kuni zaxira oladi (`data/backups`, oxirgi 14 kun).
+
+> OVH panelida "Network firewall" yoqilgan bo'lsa, 80 va 443 portlarini oching.
+
 ## Telefonga o'rnatish
 1. Ilova manzilini oching (pastga qarang).
 2. **iPhone (Safari):** "Ulashish" ⬆︎ → "Bosh ekranga qo'shish".
@@ -35,18 +63,21 @@ Boshqa bo'limlar: **Do'konlar** (manzil, telefon, nima olingani), **Sexlar** (fa
 > Eslatma: bepul rejada GitHub Pages faqat **public** repository uchun ishlaydi. Repo private bo'lsa — uni public qiling yoki Netlify / Cloudflare Pages / Vercel'ga papkani shundayicha yuklang (build kerak emas).
 
 ## Ma'lumotlar qayerda saqlanadi
-Hamma ma'lumot **o'sha telefon/brauzerning o'zida** (IndexedDB) saqlanadi — server kerak emas, internetsiz ishlaydi.
+Har bir telefonda (IndexedDB) nusxa bor — internetsiz ishlaydi. Serverga ulangan bo'lsa, server bilan sinxronlanadi.
 Telefon almashtirish yoki boshqa qurilmaga o'tkazish uchun: **⚙︎ Sozlamalar → Faylga saqlash**, keyin yangi qurilmada **Fayldan yuklash**. Haftada bir marta zaxira olib qo'ying.
 
-Keyingi bosqichda bir nechta qurilma (masalan, siz va yordamchingiz) bir vaqtda ishlashi uchun bulutli sinxronizatsiya (Supabase/Firebase) qo'shish mumkin.
 
 ## Dasturchi uchun
 Build talab qilinmaydi — oddiy HTML/CSS/JS (ES modules).
 ```bash
-npm start   # http://localhost:8080
+npm start   # faqat ilova: http://localhost:8080
+npm run server   # ilova + server: http://localhost:8080
 npm test    # hisob-kitob testlari
 ```
 - `js/calc.js` — barcha hisob-kitoblar (testlangan)
 - `js/store.js` — IndexedDB saqlash
+- `js/sync-core.js`, `js/sync.js` — server bilan sinxronlash (o'zgargan yozuvlargina yuboriladi, jonli yangilanish SSE orqali)
+- `server/server.js` — backend: ilova fayllari, SQLite, kirish, API (tashqi kutubxonasiz, Node.js 22.13+)
+- `deploy/` — Docker Compose + Caddy (avtomatik HTTPS) va o'rnatish skripti
 - `js/app.js` — interfeys
 - `sw.js` — offline kesh (yangi versiyada `VERSION` ni oshiring)

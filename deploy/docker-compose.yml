@@ -1,0 +1,33 @@
+# Fason hisob — serverda ishga tushirish (Docker).
+# HTTPS sertifikatini Caddy avtomatik oladi (Let's Encrypt).
+services:
+  app:
+    image: node:22-alpine
+    working_dir: /app
+    command: node server/server.js
+    environment:
+      - PORT=8080
+      - DATA_DIR=/data
+    volumes:
+      - ..:/app:ro          # ilova va server kodi (git dan)
+      - ../data:/data       # ma'lumotlar bazasi va kunlik zaxiralar
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:

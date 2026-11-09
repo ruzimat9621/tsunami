@@ -310,3 +310,12 @@ textarea { resize: vertical; }
 .text { color: var(--text); }
 
 [hidden] { display: none !important; }
+
+/* Bulut holati */
+.sync-badge { font-size: 20px; width: 32px; text-align: center; text-decoration: none; }
+.sb-ok { color: var(--pos); }
+.sb-syncing, .sb-pending { color: #d68a00; animation: pulse 1s infinite alternate; }
+.sb-offline, .sb-login { color: var(--muted); }
+.sb-error { color: var(--neg); }
+@keyframes pulse { from { opacity: .45; } }
+.sync-card .field { margin: 8px 0; }
