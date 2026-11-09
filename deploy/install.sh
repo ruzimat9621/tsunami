@@ -10,7 +10,7 @@ DOMAIN="${1:-}"
 
 if [ "$(id -u)" -ne 0 ]; then echo "sudo bilan ishga tushiring: sudo bash $0 $*"; exit 1; fi
 
-command -v git >/dev/null || { apt-get update -y && apt-get install -y git curl; }
+command -v git >/dev/null && command -v curl >/dev/null || { apt-get update -y && apt-get install -y git curl; }
 command -v docker >/dev/null || curl -fsSL https://get.docker.com | sh
 
 if [ -d "$DIR/.git" ]; then

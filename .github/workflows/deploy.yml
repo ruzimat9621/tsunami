@@ -1,0 +1,84 @@
+# main ga har push bo'lganda: testlar → serverga (OVH) SSH orqali o'rnatish → sayt ishlayotganini tekshirish.
+# Kerakli GitHub Secrets (Settings → Secrets and variables → Actions):
+#   SSH_HOST         — server IP manzili (masalan 51.75.1.2)
+#   SSH_USER         — SSH foydalanuvchi (OVH Ubuntu: ubuntu)
+#   SSH_PRIVATE_KEY  — deploy uchun maxsus SSH kalitning maxfiy qismi
+#   SSH_PORT         — (ixtiyoriy) 22 dan boshqa bo'lsa
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  DOMAIN: fason.lavanda.uz
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Secrets borligini tekshirish
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          missing=""
+          [ -n "$SSH_HOST" ] || missing="$missing SSH_HOST"
+          [ -n "$SSH_USER" ] || missing="$missing SSH_USER"
+          [ -n "$SSH_PRIVATE_KEY" ] || missing="$missing SSH_PRIVATE_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::GitHub Secrets yetishmaydi:$missing (Settings → Secrets and variables → Actions)"
+            exit 1
+          fi
+
+      - name: DNS tekshirish
+        run: |
+          ip="$(dig +short "$DOMAIN" A | tail -1)"
+          echo "$DOMAIN → ${ip:-(topilmadi)}"
+          if [ -z "$ip" ]; then
+            echo "::warning::$DOMAIN uchun A-yozuv topilmadi. DNS da $DOMAIN → server IP qo'shing. HTTPS sertifikati DNS ishlaganda olinadi."
+          fi
+
+      - name: Serverga o'rnatish
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          PORT="${SSH_PORT:-22}"
+          ssh-keyscan -p "$PORT" -T 15 "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -i ~/.ssh/deploy_key -p "$PORT" -o BatchMode=yes -o ConnectTimeout=20 \
+            "$SSH_USER@$SSH_HOST" "sudo bash -s -- $DOMAIN" < deploy/install.sh
+
+      - name: Sayt ishlayotganini tekshirish
+        run: |
+          for i in $(seq 1 24); do
+            if curl -fsS -m 10 "https://$DOMAIN/api/health"; then
+              echo; echo "✅ https://$DOMAIN ishlayapti"; exit 0
+            fi
+            echo "kutilmoqda ($i/24)…"; sleep 10
+          done
+          echo "::error::https://$DOMAIN javob bermadi. DNS (A-yozuv) va OVH firewall da 80/443 portlarini tekshiring."
+          exit 1

@@ -42,8 +42,22 @@ Ilova va ma'lumotlar sizning serveringizda turadi. Siz va oilangiz **bitta email
 
 Avval telefonda kiritgan ma'lumotlaringiz birinchi kirishda serverga yuklanadi.
 
-### Yangilash
-Har safar yangi versiya chiqqanda serverda: `sudo bash /opt/fason-hisob/deploy/install.sh`
+### Avtomatik deploy (GitHub → server)
+`main` ga har push bo'lganda GitHub Actions testlarni o'tkazadi, serverga SSH orqali kirib yangi versiyani o'rnatadi va `https://fason.lavanda.uz` ishlayotganini tekshiradi (`.github/workflows/deploy.yml`).
+
+Bir martalik sozlash:
+1. **DNS**: lavanda.uz boshqaruv panelida `A` yozuv: `fason` → server IP.
+2. **Serverda deploy kaliti** (SSH bilan kirib):
+   ```bash
+   ssh-keygen -t ed25519 -N "" -f ~/.ssh/fason_deploy -C github-deploy
+   cat ~/.ssh/fason_deploy.pub >> ~/.ssh/authorized_keys
+   cat ~/.ssh/fason_deploy      # maxfiy qism — faqat GitHub Secrets ga
+   ```
+3. **GitHub** → repo → Settings → Secrets and variables → Actions → New repository secret:
+   `SSH_HOST` (server IP), `SSH_USER` (masalan `ubuntu`), `SSH_PRIVATE_KEY` (yuqoridagi maxfiy kalit to'liq).
+4. Actions → Deploy → **Run workflow**.
+
+Qo'lda yangilash ham mumkin: `sudo bash /opt/fason-hisob/deploy/install.sh fason.lavanda.uz`
 
 ### Zaxira
 Ma'lumotlar bazasi: `/opt/fason-hisob/data/fason.db`. Server har kuni zaxira oladi (`data/backups`, oxirgi 14 kun).
