@@ -2,7 +2,7 @@
 // Har bir yozuv (fason, do'kon, sex, oylik rasxod, rasm) serverda alohida qator bo'lib saqlanadi.
 // Mahalliy holat oxirgi sinxronlangan holat bilan solishtiriladi (hash), faqat o'zgarganlari yuboriladi.
 
-export const KINDS = ['models', 'shops', 'workshops', 'overhead', 'recurring'];
+export const KINDS = ['models', 'shops', 'workshops', 'overhead', 'recurring', 'orders'];
 const CHUNK = 15;
 
 export function stableStringify(v) {

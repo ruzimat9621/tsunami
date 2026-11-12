@@ -267,3 +267,22 @@ test('rasvetkalar bo\'yicha qismlar; jami son rasvetkasiz qo\'lda kiritilsa taqs
   assert.equal(s.qty, 64);
   assert.deepEqual(s.groups.map((g) => g.qty), [30, 34]);
 });
+
+test('rasvetka bo\'yicha ombor qoldig\'i va narxi', () => {
+  const m = {
+    colorways: [{ id: 'c' }, { id: 'b' }],
+    materials: [
+      { colorwayId: 'c', unit: 'm', qty: 30, price: 1000, parts: [{ per: 2 }] },
+      { colorwayId: 'b', unit: 'm', qty: 30, price: 3000, parts: [{ per: 2 }] },
+    ],
+    receipts: [{ qty: 15, colorwayId: 'c' }, { qty: 14, colorwayId: 'b' }],
+    sales: [{ qty: 3, price: 10, colorwayId: 'b' }, { qty: 1, price: 10, colorwayId: 'b' }],
+    markupType: '%', markupValue: 100,
+  };
+  const s = modelSummary(m);
+  assert.deepEqual(s.cwStock.get('b'), { received: 14, sold: 4, stock: 10 });
+  assert.equal(s.cwStock.get('c').stock, 15);
+  assert.equal(s.stock, 25);
+  assert.equal(s.priceFor('b'), 2 * s.groups[1].unitCost);
+  assert.ok(s.priceFor('b') > s.priceFor('c'));
+});

@@ -35,7 +35,7 @@ const ACCESSORIES = ['Tugma', 'Zamok', 'Rezinka', 'Lenta', 'Kant', 'Etiketka', '
 const telLink = (p) => (p ? `<a class="tel" href="tel:${h(String(p).replace(/[^\d+]/g, ''))}">📞 ${h(p)}</a>` : '');
 
 let state = null;
-const ui = { tab: {}, open: {}, month: thisMonth(), search: '' };
+const ui = { tab: {}, open: {}, month: thisMonth(), search: '', cart: [], kassaQ: '', ordersFilter: 'all' };
 
 async function commit() {
   await saveState(state);
@@ -120,6 +120,7 @@ function openForm(cfg) {
       <div class="sheet-body"><div class="fields">${cfg.fields.map((f) => fieldHtml(f, v)).join('')}</div><div id="form-live" class="form-live"></div></div>
       <div class="sheet-foot">
         ${cfg.onDelete ? `<button type="button" class="btn danger" data-act="form-delete">O'chirish</button>` : ''}
+        ${cfg.extra ? `<button type="button" class="btn" data-act="form-extra">${h(cfg.extra.label)}</button>` : ''}
         <button type="submit" class="btn primary">${h(cfg.submitText || 'Saqlash')}</button>
       </div>
     </form>`;
@@ -188,6 +189,7 @@ document.addEventListener('submit', async (e) => {
 document.addEventListener('input', (e) => {
   if (e.target.closest('#sheet-form')) updateLive();
   if (e.target.id === 'search') { ui.search = e.target.value; renderList(); }
+  if (e.target.id === 'kassa-search') { ui.kassaQ = e.target.value; renderKassaProducts(); }
 });
 
 document.addEventListener('change', async (e) => {
@@ -209,6 +211,14 @@ document.addEventListener('change', async (e) => {
     toast(`${files.length} ta rasvetka qo'shildi. Rangini yozish uchun rasmni bosing.`);
   }
   if (inp.id === 'import-file' && inp.files?.[0]) importBackup(inp.files[0]);
+  if (inp.dataset.cartPrice || inp.dataset.cartQty) {
+    const line = ui.cart.find((l) => l.key === (inp.dataset.cartPrice || inp.dataset.cartQty));
+    if (line) {
+      if (inp.dataset.cartPrice) line.price = Math.max(0, num(inp.value));
+      else line.qty = Math.max(1, Math.round(num(inp.value)) || 1);
+      saveCart(); render();
+    }
+  }
   if (inp.closest('#sheet-form')) updateLive();
 });
 
@@ -718,12 +728,17 @@ function viewModel(id) {
   const m = model(id);
   if (!m) return header('Topilmadi', { back: '#/models' }) + empty('Fason topilmadi');
   const s = modelSummary(m);
-  const tab = ui.tab[id] || 'hisob';
-  const tabs = [['hisob', 'Hisob'], ['material', 'Material'], ['sex', 'Sex/Xizmat'], ['sotuv', 'Sotuv']];
+  const tab = ui.tab[id] || (s.received > 0 ? 'sotuv' : 'hisob');
+  const tabs = [['sotuv', 'Sotuv'], ['hisob', 'Hisob'], ['material', 'Material'], ['sex', 'Sex/Xizmat']];
   const body = { hisob: tabHisob, material: tabMaterial, sex: tabSex, sotuv: tabSotuv }[tab](m, s);
   const gq = new Map(s.split ? s.groups.map((g) => [g.id, g.qty]) : []);
+  // Sotuvda: omborda qancha qolgani; aks holda: nechta chiqadi
+  const cwLabelQty = (c) => {
+    if (s.cwStock.has(c.id)) { const st = s.cwStock.get(c.id).stock; return `<small class="stock-tag ${st <= 0 ? 'zero' : ''}">qoldi ${fmt(st, 0)}</small>`; }
+    return gq.has(c.id) ? `<small>${fmt(gq.get(c.id), 0)} dona</small>` : '';
+  };
   const cws = m.colorways.map((c) => `<button class="cw" data-act="edit-colorway" data-id="${m.id}" data-sub="${c.id}">
-      <img src="${h(photoSrc(c))}" alt="" loading="lazy"><span>${h(c.color || 'rang?')}</span>${gq.has(c.id) ? `<small>${fmt(gq.get(c.id), 0)} dona</small>` : ''}</button>`).join('');
+      <img src="${h(photoSrc(c))}" alt="" loading="lazy"><span>${h(c.color || 'rang?')}</span>${cwLabelQty(c)}</button>`).join('');
   return header(m.name, { back: '#/models', right: `<button class="icon-btn" data-act="edit-model" data-id="${m.id}" aria-label="Tahrirlash">✎</button>` }) + `<main>
     <div class="model-meta">${statusChip(m.status)}${m.code ? `<span class="muted">Kod: ${h(m.code)}</span>` : ''}${m.sizes ? `<span class="muted">O'lcham: ${h(m.sizes)}</span>` : ''}${m.date ? `<span class="muted">${dateUz(m.date)}</span>` : ''}</div>
     <div class="sec-row"><h2 class="sec">Rasvetkalar · ${m.colorways.length} ta</h2></div>
@@ -938,16 +953,27 @@ function tabSotuv(m, s) {
     </div>`;
   }).join('');
   const mk = m.markupType === 'price' ? "O'zim yozgan narx" : m.markupType === 'sum' ? '+' + money(m.markupValue) : '+' + fmt(m.markupValue) + '%';
+  const cwRows = m.colorways.filter((c) => s.cwStock.has(c.id)).map((c) => {
+    const st = s.cwStock.get(c.id);
+    return `<div class="stock-cw"><img src="${h(photoSrc(c))}" alt=""><span>${h(c.color || 'rang?')}</span><b class="${st.stock <= 0 ? 'zero' : ''}">${fmt(st.stock, 0)}</b><small>/${fmt(st.received, 0)}</small></div>`;
+  }).join('');
   return `
+  <section class="card stock-card ${s.stock <= 0 ? 'empty-stock' : ''}">
+    <div class="stock-title">Omborda qoldi</div>
+    <div class="stock-big">${fmt(s.stock, 0)} <small>dona</small></div>
+    <div class="stock-sub">Olingan ${fmt(s.received, 0)} · sotilgan ${fmt(s.sold, 0)}</div>
+    ${cwRows ? `<div class="stock-cws">${cwRows}</div>` : ''}
+    <button class="btn primary block" data-act="sell-model" data-id="${m.id}">🧾 Kassada sotish</button>
+  </section>
   <section class="card grid2">
     ${kv('Tannarx (1 dona)', money(s.unitCost))}
     ${kv('Sotuv narxi', money(s.price))}
     ${kv('Belgilash', mk)}
     ${kv('1 donadan foyda', money(s.unitProfit), s.unitProfit < 0 ? 'neg' : 'pos')}
     ${kv(`Hammasi sotilsa (${fmt(s.qty, 0)})`, money(s.expectedProfit), s.expectedProfit < 0 ? 'neg' : 'pos')}
-    ${kv('Omborda', fmt(s.stock, 0) + ' dona')}
+    ${kv('Sotuvdan foyda', money(s.profitSold), s.profitSold < 0 ? 'neg' : 'pos')}
   </section>
-  <div class="quick"><button class="btn" data-act="markup" data-id="${m.id}">Sotuv narxini belgilash</button><button class="btn primary" data-act="add-sale" data-id="${m.id}">+ Sotuv</button></div>
+  <div class="quick"><button class="btn" data-act="markup" data-id="${m.id}">Sotuv narxini belgilash</button><button class="btn ghost" data-act="add-sale" data-id="${m.id}">+ Qo'lda sotuv</button></div>
   <h2 class="sec">Sotuvlar · ${fmt(s.sold, 0)} dona · ${money(s.revenue)} · foyda ${money(s.profitSold)}</h2>
   ${sales || empty("Do'konga topshirgan yoki sotgan tovaringizni shu yerga yozing.")}`;
 }
@@ -1145,13 +1171,226 @@ function viewSettings() {
   </main>`;
 }
 
+// ---------- Kassa (Billz kassaga o'xshash: savat → chek) ----------
+const PAYMENTS = { naqd: 'Naqd', karta: 'Karta', otkazma: "O'tkazma", qarz: 'Qarz / nasiya' };
+const CART_KEY = 'fason-cart';
+try { ui.cart = JSON.parse(localStorage.getItem(CART_KEY) || '[]'); } catch { ui.cart = []; }
+function saveCart() { try { localStorage.setItem(CART_KEY, JSON.stringify(ui.cart)); } catch { /* */ } }
+
+const orderLines = (o) => state.models.flatMap((m) => (m.sales || []).filter((x) => x.orderId === o.id).map((x) => ({ m, x })));
+const orderDebt = (o) => (o.payment === 'qarz' ? Math.max(0, num(o.total) - num(o.paid)) : 0);
+const cartTotal = () => sum(ui.cart, (l) => num(l.qty) * num(l.price));
+const cartCount = () => sum(ui.cart, (l) => num(l.qty));
+
+function lineInfo(l) {
+  const m = model(l.modelId);
+  if (!m) return null;
+  const cw = m.colorways.find((c) => c.id === l.colorwayId);
+  const s = modelSummary(m);
+  const stock = cw && s.cwStock.has(cw.id) ? s.cwStock.get(cw.id).stock : s.stock;
+  const inCart = sum(ui.cart.filter((x) => x.modelId === l.modelId && (!cw || x.colorwayId === l.colorwayId)), (x) => num(x.qty));
+  return { m, cw, s, stock, inCart, photo: cw ? photoSrc(cw) : cover(m), name: m.name + (cw?.color ? ' · ' + cw.color : '') };
+}
+
+function cartAdd(modelId, colorwayId) {
+  const key = modelId + ':' + colorwayId;
+  const line = ui.cart.find((l) => l.key === key);
+  if (line) line.qty++;
+  else {
+    const m = model(modelId);
+    ui.cart.push({ key, modelId, colorwayId, qty: 1, price: Math.round(modelSummary(m).priceFor(colorwayId)) });
+  }
+  saveCart();
+  render();
+  toast("Savatga qo'shildi ✓");
+}
+
+function viewKassa() {
+  const td = today();
+  const todays = state.orders.filter((o) => o.date === td);
+  const todayRev = sum(todays, (o) => num(o.total));
+  const todayQty = sum(todays, (o) => sum(orderLines(o), ({ x }) => num(x.qty)));
+  const debtTotal = sum(state.orders, orderDebt);
+  const cartHtml = ui.cart.map((l) => {
+    const i = lineInfo(l);
+    if (!i) return '';
+    const over = i.inCart > i.stock;
+    return `<div class="cart-line">
+      <div class="thumb sm">${i.photo ? `<img src="${h(i.photo)}" alt="">` : '👗'}</div>
+      <div class="cl-body">
+        <b>${h(i.name)}</b>
+        <div class="muted small ${over ? 'neg' : ''}">Omborda: ${fmt(i.stock, 0)}${over ? ' — yetmaydi!' : ''}</div>
+        <div class="cl-row">
+          <div class="qty"><button class="icon-btn" data-act="cart-dec" data-key="${h(l.key)}">−</button><input type="text" inputmode="numeric" data-cart-qty="${h(l.key)}" value="${l.qty}"><button class="icon-btn" data-act="cart-inc" data-key="${h(l.key)}">+</button></div>
+          <input class="price-in" type="text" inputmode="numeric" data-cart-price="${h(l.key)}" value="${Math.round(num(l.price))}">
+        </div>
+      </div>
+      <div class="cl-end"><button class="icon-btn" data-act="cart-del" data-key="${h(l.key)}" aria-label="O'chirish">✕</button><b>${money(num(l.qty) * num(l.price))}</b></div>
+    </div>`;
+  }).join('');
+  const shown = state.orders.filter((o) => ui.ordersFilter !== 'qarz' || orderDebt(o) > 0)
+    .slice().sort((a, b) => `${b.date}${b.time || ''}`.localeCompare(`${a.date}${a.time || ''}`)).slice(0, 60);
+  let lastDate = '';
+  const ordersHtml = shown.map((o) => {
+    const lines = orderLines(o);
+    const qty = sum(lines, ({ x }) => num(x.qty));
+    const debt = orderDebt(o);
+    const head = o.date !== lastDate ? `<div class="day-head">${dateUz(o.date)}</div>` : '';
+    lastDate = o.date;
+    return head + `<div class="card item" data-act="open-order" data-id="${o.id}">
+      <div class="item-top"><b>${h(o.customer || 'Xaridor')}</b>${o.phone ? `<span class="muted small">${h(o.phone)}</span>` : ''}<span class="grow"></span><b>${money(o.total)}</b></div>
+      <div class="muted small">${o.time || ''} · ${fmt(qty, 0)} dona · ${h(PAYMENTS[o.payment] || o.payment || '')}${debt > 0 ? ` · <span class="neg">qarz ${money(debt)}</span>` : ''}</div>
+      <div class="muted small ellipsis">${lines.map(({ m, x }) => { const c = m.colorways.find((y) => y.id === x.colorwayId); return `${h(m.name)}${c?.color ? ' ' + h(c.color) : ''} ×${fmt(x.qty, 0)}`; }).join(', ')}</div>
+    </div>`;
+  }).join('');
+  return header('Kassa') + `<main>
+    <section class="card grid3">
+      ${kv('Bugun tushum', money(todayRev))}
+      ${kv('Bugun sotildi', fmt(todayQty, 0) + ' dona')}
+      ${kv('Mijozlarda qarz', money(debtTotal), debtTotal > 0 ? 'neg' : '')}
+    </section>
+    <div class="toolbar"><input id="kassa-search" type="search" placeholder="Fason qidirish..." value="${h(ui.kassaQ)}">${ui.kassaQ ? '<button class="btn" data-act="kassa-clear-search">✕</button>' : ''}</div>
+    <div id="kassa-products"></div>
+    ${ui.cart.length ? `<section class="card cart" id="cart">
+      <div class="sec-row"><h3>🛒 Savat</h3><button class="btn ghost sm" data-act="cart-clear">Tozalash</button></div>
+      ${cartHtml}
+      <div class="cart-total"><span>${fmt(cartCount(), 0)} dona</span><b>${money(cartTotal())}</b></div>
+      <button class="btn primary block big-btn" data-act="checkout">Rasmiylashtirish →</button>
+    </section>` : ''}
+    <div class="sec-row"><h2 class="sec">Cheklar</h2>
+      <div class="seg"><button class="${ui.ordersFilter !== 'qarz' ? 'on' : ''}" data-act="orders-filter" data-f="all">Hammasi</button><button class="${ui.ordersFilter === 'qarz' ? 'on' : ''}" data-act="orders-filter" data-f="qarz">Qarzlar</button></div>
+    </div>
+    ${ordersHtml || empty(ui.ordersFilter === 'qarz' ? "Qarz yo'q 👍" : "Hali sotuv yo'q. Yuqoridan rasvetkani bosing — savatga tushadi.")}
+  </main>
+  ${ui.cart.length ? `<a href="#cart" class="cart-bar" onclick="document.getElementById('cart').scrollIntoView({behavior:'smooth'});return false;">🛒 ${fmt(cartCount(), 0)} dona · <b>${money(cartTotal())}</b><span>Savat →</span></a>` : ''}`;
+}
+
+function renderKassaProducts() {
+  const el = $('#kassa-products');
+  if (!el) return;
+  const q = ui.kassaQ.trim().toLowerCase();
+  const list = state.models.filter((m) => m.status !== 'yopilgan' && (!q || `${m.name} ${m.code || ''} ${m.colorways.map((c) => c.color).join(' ')}`.toLowerCase().includes(q)));
+  el.innerHTML = list.map((m) => {
+    const s = modelSummary(m);
+    const tiles = (m.colorways.length ? m.colorways : [null]).map((c) => {
+      const st = c && s.cwStock.has(c.id) ? s.cwStock.get(c.id).stock : (c && s.split ? null : s.stock);
+      const src = c ? photoSrc(c) : cover(m);
+      return `<button class="ptile ${st !== null && st <= 0 ? 'out' : ''}" data-act="cart-add" data-id="${m.id}" data-cw="${c ? c.id : ''}">
+        <div class="pimg">${src ? `<img src="${h(src)}" alt="" loading="lazy">` : '👗'}${st !== null ? `<span class="pstock">${fmt(st, 0)}</span>` : ''}</div>
+        <span class="pname">${h(c?.color || m.name)}</span>
+        <span class="pprice">${money(s.priceFor(c ? c.id : ''))}</span>
+      </button>`;
+    }).join('');
+    return `<section class="product"><div class="product-head"><b>${h(m.name)}</b><span class="muted small">omborda ${fmt(s.stock, 0)}</span></div><div class="ptiles">${tiles}</div></section>`;
+  }).join('') || empty(q ? 'Topilmadi' : "Sotuvdagi fason yo'q");
+}
+
+function checkoutForm() {
+  if (!ui.cart.length) return;
+  const base = cartTotal();
+  const over = ui.cart.map(lineInfo).filter((i) => i && i.inCart > i.stock);
+  const customers = [...new Map(state.orders.filter((o) => o.customer).map((o) => [o.customer, o.phone])).entries()];
+  openForm({
+    title: `Rasmiylashtirish · ${fmt(cartCount(), 0)} dona`,
+    values: { date: today(), payment: 'naqd', total: Math.round(base) },
+    fields: [
+      { name: 'customer', label: "Xaridor (ism yoki do'kon)", list: customers.map(([n]) => n), placeholder: 'Masalan: Hamida opa' },
+      { name: 'phone', label: 'Telefon', type: 'tel', placeholder: '+998 ...' },
+      { name: 'payment', label: "To'lov turi", type: 'select', options: Object.entries(PAYMENTS).map(([value, label]) => ({ value, label })) },
+      { name: 'total', label: 'Umumiy summa', type: 'number', required: true, suffix: "so'm", hint: "O'zgartirsangiz — chegirma (yoki ustama) hamma tovarga teng taqsimlanadi" },
+      { name: 'paid', label: "Hozir to'landi", type: 'number', suffix: "so'm", showIf: (v) => v.payment === 'qarz', hint: 'Qolgani qarz bo\'lib yoziladi' },
+      { name: 'date', label: 'Sana', type: 'date' },
+      { name: 'note', label: 'Izoh', type: 'textarea' },
+    ],
+    live: (v) => {
+      const total = num(v.total);
+      const cost = sum(ui.cart, (l) => num(l.qty) * modelSummary(model(l.modelId)).unitCostFor(l.colorwayId));
+      const disc = base - total;
+      return `${disc ? `<div class="live-row"><span>Savat summasi</span><b>${money(base)}</b></div>
+        <div class="live-row ${disc > 0 ? 'neg' : 'pos'}"><span>${disc > 0 ? 'Chegirma' : 'Ustama'}</span><b>${money(Math.abs(disc))}</b></div>` : ''}
+        <div class="live-row big"><span>To'lanadi</span><b>${money(total)}</b></div>
+        ${v.payment === 'qarz' ? `<div class="live-row neg"><span>Qarz bo'ladi</span><b>${money(Math.max(0, total - num(v.paid)))}</b></div>` : ''}
+        <div class="live-row ${total - cost < 0 ? 'neg' : 'pos'}"><span>Foyda</span><b>${money(total - cost)}</b></div>
+        ${over.length ? `<div class="warn small">Omborda yetmaydi: ${over.map((i) => h(i.name)).join(', ')}</div>` : ''}`;
+    },
+    submitText: '✓ Sotish',
+    onSubmit: (v) => {
+      if (!v.phone && v.customer) v.phone = customers.find(([n]) => n === v.customer)?.[1] || '';
+      const d = new Date();
+      const order = {
+        id: uid(), date: v.date || today(), time: `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`,
+        customer: v.customer, phone: v.phone, payment: v.payment, total: num(v.total),
+        paid: v.payment === 'qarz' ? num(v.paid) : num(v.total), note: v.note,
+      };
+      const k = base > 0 ? order.total / base : 1;
+      for (const l of ui.cart) {
+        const m = model(l.modelId);
+        if (!m) continue;
+        m.sales.push({ id: uid(), orderId: order.id, colorwayId: l.colorwayId, qty: num(l.qty), price: Math.round(num(l.price) * k), where: v.customer, date: order.date });
+      }
+      state.orders.push(order);
+      ui.cart = [];
+      saveCart();
+      setTimeout(() => toast(`Sotildi ✓ ${money(order.total)}`), 300);
+    },
+  });
+}
+
+function receiptText(o) {
+  const lines = orderLines(o).map(({ m, x }) => {
+    const c = m.colorways.find((y) => y.id === x.colorwayId);
+    return `${m.name}${c?.color ? ' (' + c.color + ')' : ''} — ${fmt(x.qty, 0)} × ${money(x.price)}`;
+  });
+  return [`🧾 Chek · ${dateUz(o.date)} ${o.time || ''}`, o.customer ? `Xaridor: ${o.customer}` : '', '', ...lines, '',
+    `Jami: ${money(o.total)}`, `To'lov: ${PAYMENTS[o.payment] || o.payment}`, orderDebt(o) ? `Qarz: ${money(orderDebt(o))}` : ''].filter((x) => x !== null).join('\n').replace(/\n{3,}/g, '\n\n');
+}
+
+function orderForm(o) {
+  if (!o) return;
+  const lines = orderLines(o);
+  openForm({
+    title: `Chek · ${dateUz(o.date)} ${o.time || ''}`,
+    values: o,
+    fields: [
+      { name: 'customer', label: 'Xaridor' },
+      { name: 'phone', label: 'Telefon', type: 'tel' },
+      { name: 'payment', label: "To'lov turi", type: 'select', options: Object.entries(PAYMENTS).map(([value, label]) => ({ value, label })) },
+      { name: 'paid', label: "To'langan", type: 'number', suffix: "so'm", showIf: (v) => v.payment === 'qarz', hint: "Qarz to'lansa — shu yerda yangilang" },
+      { name: 'note', label: 'Izoh', type: 'textarea' },
+    ],
+    live: (v) => `${lines.map(({ m, x }) => { const c = m.colorways.find((y) => y.id === x.colorwayId); return `<div class="live-row"><span>${h(m.name)}${c?.color ? ' · ' + h(c.color) : ''} × ${fmt(x.qty, 0)}</span><b>${money(num(x.qty) * num(x.price))}</b></div>`; }).join('') || '<div class="muted">Tovar qatorlari topilmadi</div>'}
+      <div class="live-row big"><span>Jami</span><b>${money(o.total)}</b></div>
+      ${v.payment === 'qarz' ? `<div class="live-row neg"><span>Qarz</span><b>${money(Math.max(0, num(o.total) - num(v.paid)))}</b></div>` : ''}`,
+    extra: {
+      label: '📤 Chek',
+      onClick: async () => {
+        const text = receiptText(o);
+        try { if (navigator.share) { await navigator.share({ text }); return; } } catch (e) { if (e.name === 'AbortError') return; }
+        try { await navigator.clipboard.writeText(text); toast('Chek nusxalandi'); } catch { prompt('Chek:', text); }
+      },
+    },
+    onSubmit: (v) => {
+      Object.assign(o, v);
+      if (o.payment !== 'qarz') o.paid = o.total;
+      for (const { x } of lines) x.where = o.customer;
+    },
+    onDelete: () => {
+      if (!confirm("Chekni o'chirasizmi? Tovarlar omborga qaytadi.")) return false;
+      for (const m of state.models) m.sales = (m.sales || []).filter((x) => x.orderId !== o.id);
+      state.orders = state.orders.filter((x) => x !== o);
+    },
+  });
+}
+
 // ---------- Router ----------
-const NAV = [['#/', '🏠', 'Asosiy'], ['#/models', '👗', 'Fasonlar'], ['#/shops', '🏪', "Do'konlar"], ['#/workshops', '🧵', 'Sexlar'], ['#/monthly', '📅', 'Oylik']];
+const NAV = [['#/', '🏠', 'Asosiy'], ['#/models', '👗', 'Fasonlar'], ['#/kassa', '🧾', 'Kassa'], ['#/shops', '🏪', "Do'konlar"], ['#/workshops', '🧵', 'Sexlar'], ['#/monthly', '📅', 'Oylik']];
 
 function render() {
   const hash = location.hash || '#/';
   const [, route, id] = hash.split('/');
   if (route === 'connect') { connectFromLink(id); return; }
+  // Fasonga boshqa sahifadan kirilganda — har doim Sotuv (tovar olingan bo'lsa) bilan ochiladi
+  if (route === 'model' && render.last !== hash) delete ui.tab[id];
   let html;
   switch (route) {
     case 'models': html = viewModels(); break;
@@ -1161,6 +1400,7 @@ function render() {
     case 'workshops': html = viewWorkshops(); break;
     case 'workshop': html = viewWorkshop(id); break;
     case 'monthly': html = viewMonthly(); break;
+    case 'kassa': html = viewKassa(); break;
     case 'settings': html = viewSettings(); break;
     default: html = viewDashboard();
   }
@@ -1171,6 +1411,7 @@ function render() {
   const section = { model: '#/models', shop: '#/shops', workshop: '#/workshops' }[route] || '#/' + (route || '');
   $('#nav').innerHTML = NAV.map(([href, icon, label]) => `<a href="${href}" class="${href === section || (href === '#/' && !route) ? 'on' : ''}"><span>${icon}</span>${label}</a>`).join('');
   if (route === 'models') renderList();
+  if (route === 'kassa') renderKassaProducts();
   window.scrollTo(0, sameRoute ? scroll : 0);
   if (route === 'settings' && deferredInstall) $('#install-btn').hidden = false;
 }
@@ -1214,6 +1455,17 @@ const actions = {
     saleForm(m);
   },
   'edit-sale': (d) => { const m = model(d.id); saleForm(m, findSub(m.sales, d.sub)); },
+  'form-extra': () => currentForm?.extra?.onClick(),
+  'sell-model': (d) => { const m = model(d.id); ui.kassaQ = m.name; location.hash = '#/kassa'; },
+  'cart-add': (d) => { cartAdd(d.id, d.cw || ''); },
+  'cart-inc': (d) => { const l = ui.cart.find((x) => x.key === d.key); if (l) { l.qty++; saveCart(); render(); } },
+  'cart-dec': (d) => { const l = ui.cart.find((x) => x.key === d.key); if (l) { l.qty = Math.max(1, l.qty - 1); saveCart(); render(); } },
+  'cart-del': (d) => { ui.cart = ui.cart.filter((x) => x.key !== d.key); saveCart(); render(); },
+  'cart-clear': () => { if (!confirm('Savatni tozalaysizmi?')) return; ui.cart = []; saveCart(); render(); },
+  'checkout': () => checkoutForm(),
+  'open-order': (d) => orderForm(byId('orders', d.id)),
+  'orders-filter': (d) => { ui.ordersFilter = d.f; render(); },
+  'kassa-clear-search': () => { ui.kassaQ = ''; render(); },
   'new-shop': () => shopForm(null),
   'edit-shop': (d) => shopForm(byId('shops', d.id)),
   'new-workshop': () => workshopForm(null),

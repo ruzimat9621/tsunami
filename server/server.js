@@ -116,7 +116,7 @@ setInterval(() => { for (const set of streams.values()) for (const res of set) r
 const upsertStmt = db.prepare(`
   INSERT INTO records (owner, kind, id, data, deleted, rev) VALUES (?, ?, ?, ?, ?, ?)
   ON CONFLICT (owner, kind, id) DO UPDATE SET data = excluded.data, deleted = excluded.deleted, rev = excluded.rev`);
-const KINDS = new Set(['models', 'shops', 'workshops', 'overhead', 'recurring', 'photos']);
+const KINDS = new Set(['models', 'shops', 'workshops', 'overhead', 'recurring', 'orders', 'photos']);
 
 async function api(req, res, url) {
   const route = url.pathname.slice(4); // "/api" dan keyingi qism

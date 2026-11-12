@@ -224,12 +224,23 @@ export function modelSummary(m) {
   const tagged = split ? sum(groups, (g) => g.received) : 0;
   const untaggedReceipts = split && tagged > 0 ? received - tagged : 0;
 
+  // Rasvetka bo'yicha ombor qoldig'i (tovar sexdan olingan bo'lsa)
+  const cwStock = new Map();
+  if (split && received > 0) {
+    for (const g of groups) {
+      const soldG = sum((m.sales || []).filter((x) => x.colorwayId === g.id), (x) => num(x.qty));
+      cwStock.set(g.id, { received: g.qty, sold: soldG, stock: g.qty - soldG });
+    }
+  }
+  // Kassa uchun: rasvetka sotuv narxi
+  const priceFor = (colorwayId) => (split && byGroup.has(colorwayId) ? byGroup.get(colorwayId).price : price);
+
   return {
     received, planned, qty, basis, isActual: basis === 'received',
     split, groups, sharedRows, sharedTotal, sharedPossible: shareLim.possible, untaggedReceipts,
     parts, komplektAuto,
     rows, fabrics, accessories, fabricTotal, accTotal, materialsTotal, leftValue,
-    possibleOutput, limiting, unitCostFor,
+    possibleOutput, limiting, unitCostFor, priceFor, cwStock,
     wsLines, wsItem, workshopTotal, services, servicesTotal, extras, extrasTotal, totalCost,
     unitCost, unitCostNet,
     unitFabric: per(fabricTotal), unitAcc: per(accTotal), unitServices: per(servicesTotal),

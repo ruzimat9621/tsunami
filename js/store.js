@@ -12,6 +12,7 @@ export function emptyState() {
     models: [],
     overhead: [],
     recurring: [],
+    orders: [], // kassa cheklari: xaridor, to'lov, summa (qatorlari — fason sotuvlarida orderId bilan)
     photos: {}, // rasmlar alohida: { photoId: dataURL } — sinxronlashda har biri bir marta yuboriladi
   };
 }
@@ -75,7 +76,7 @@ export function normalize(val) {
   const base = emptyState();
   if (!val || typeof val !== 'object') return base;
   const s = { ...base, ...val };
-  for (const k of ['shops', 'workshops', 'models', 'overhead', 'recurring']) {
+  for (const k of ['shops', 'workshops', 'models', 'overhead', 'recurring', 'orders']) {
     if (!Array.isArray(s[k])) s[k] = [];
   }
   s.models = s.models.map(migrateModel);
